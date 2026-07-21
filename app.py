@@ -642,35 +642,21 @@ def dashboard():
 
     return render_template_string(
         """
-        <!doctype html>
-        <html lang="en">
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Dashboard</title>
-            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-        </head>
-        <body class="bg-light">
-            <div class="container py-5">
+        {% extends "base.html" %}
+        {% block title %}Dashboard{% endblock %}
+        {% block page_content %}
+                <div class="page-header">
+                    <h1>Dashboard</h1>
+                    <p>Welcome back, {{ current_user.username }}.</p>
+                </div>
                 <div class="card shadow-sm mb-4">
                     <div class="card-body">
-                        <h1 class="h3 mb-3">Dashboard</h1>
-                        <p>Welcome, {{ current_user.username }}.</p>
                         <form method="post" action="{{ url_for('punch_in') }}" style="display:inline-block;">
                             <button class="btn btn-success">Punch In</button>
                         </form>
                         <form method="post" action="{{ url_for('punch_out') }}" style="display:inline-block; margin-left:8px;">
                             <button class="btn btn-danger">Punch Out</button>
                         </form>
-                        {% if current_user.role == 'admin' %}
-                            <a class="btn btn-warning ms-2" href="{{ url_for('admin') }}">Admin Panel</a>
-                            <a class="btn btn-outline-secondary ms-2" href="{{ url_for('admin_attendance') }}">Attendance Management</a>
-                            <a class="btn btn-outline-primary ms-2" href="{{ url_for('task_management') }}">Task Management</a>
-                            <a class="btn btn-outline-success ms-2" href="{{ url_for('admin_projects') }}">Manage Projects</a>
-                        {% else %}
-                            <a class="btn btn-outline-primary ms-2" href="{{ url_for('my_tasks') }}">My Tasks</a>
-                        {% endif %}
-                        <a class="btn btn-outline-danger ms-2" href="{{ url_for('logout') }}">Logout</a>
                     </div>
                 </div>
 
@@ -714,9 +700,7 @@ def dashboard():
                         </div>
                     </div>
                 </div>
-            </div>
-        </body>
-        </html>
+        {% endblock %}
         """,
         today_row=row,
         records=records,
@@ -2842,4 +2826,5 @@ def download_attendance():
 
 
 if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
     app.run(debug=True)
