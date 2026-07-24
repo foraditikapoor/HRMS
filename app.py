@@ -189,9 +189,10 @@ def send_welcome_email(recipient_email, full_name, username, temporary_password)
 
     try:
         with smtplib.SMTP(MAIL_SERVER, MAIL_PORT, timeout=10) as server:
-            server.starttls()
-            server.login(EMAIL_ADDRESS, EMAIL_APP_PASSWORD)
-            server.sendmail(EMAIL_ADDRESS, recipient_email, message.as_string())
+    server.starttls()
+    server.login(MAIL_USERNAME, MAIL_PASSWORD)
+    server.send_message(msg)
+    print("DEBUG: Welcome email sent successfully")
     except Exception:
         traceback.print_exc()
 
