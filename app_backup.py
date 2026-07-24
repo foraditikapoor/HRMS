@@ -75,7 +75,7 @@ def send_account_created_email(recipient_email, username, temporary_password):
     message["From"] = MAIL_DEFAULT_SENDER
     message["To"] = recipient_email
 
-    with smtplib.SMTP(MAIL_SERVER, MAIL_PORT) as server:
+    with smtplib.SMTP(MAIL_SERVER, MAIL_PORT timeout=10) as server:
         server.starttls()
         server.login(MAIL_USERNAME, MAIL_PASSWORD)
         server.sendmail(MAIL_DEFAULT_SENDER, recipient_email, message.as_string())
