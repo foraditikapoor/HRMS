@@ -166,6 +166,8 @@ def save_uploaded_file(file_storage):
 
 
 def send_welcome_email(recipient_email, full_name, username, temporary_password):
+    server.send_message(msg)
+    print("DEBUG: Welcome email sent successfully")
     """Send a welcome email with login info using Gmail SMTP.
 
     Uses `EMAIL_ADDRESS` and `EMAIL_APP_PASSWORD` for authentication.
