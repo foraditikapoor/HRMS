@@ -97,8 +97,12 @@ EMAIL_ADDRESS = MAIL_USERNAME
 EMAIL_APP_PASSWORD = MAIL_PASSWORD
 
 # Temporary debug prints (masked): show whether env vars were loaded
-print(f"DEBUG: MAIL_USERNAME set: {'yes' if MAIL_USERNAME else 'no'}")
-print(f"DEBUG: MAIL_PASSWORD set: {'yes' if MAIL_PASSWORD else 'no'} (value hidden)")
+import logging
+
+logging.basicConfig(level=logging.INFO)
+
+logging.info(f"MAIL_USERNAME loaded: {'yes' if MAIL_USERNAME else 'no'}")
+logging.info(f"MAIL_PASSWORD loaded: {'yes' if MAIL_PASSWORD else 'no'}")
 
 os.makedirs(app.instance_path, exist_ok=True)
 
