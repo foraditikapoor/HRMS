@@ -235,7 +235,7 @@ def ensure_attendance_table():
 def ensure_employee_table():
     """Create employee table if it does not exist.
 
-    Fields: user_id, name, address, education, experience, emergency_contact,
+    Fields: user_id, name, address, education, experience, contact_number, emergency_contact,
     department (comma-separated), salary, pan_path, aadhaar_path, other_docs_path
     """
     with get_db() as conn:
@@ -248,6 +248,7 @@ def ensure_employee_table():
                 address TEXT,
                 education TEXT,
                 experience TEXT,
+                contact_number TEXT,
                 emergency_contact TEXT,
                 department TEXT,
                 salary REAL,
@@ -260,6 +261,8 @@ def ensure_employee_table():
         columns = {row[1] for row in conn.execute("PRAGMA table_info(employees)").fetchall()}
         if "user_id" not in columns:
             conn.execute("ALTER TABLE employees ADD COLUMN user_id INTEGER")
+        if "contact_number" not in columns:
+            conn.execute("ALTER TABLE employees ADD COLUMN contact_number TEXT")
         # Existing employee records have no linked user and remain untouched.
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_user_id "
@@ -1831,6 +1834,7 @@ def add_employee():
         address = request.form.get('address', '').strip()
         education = request.form.get('education', '').strip()
         experience = request.form.get('experience', '').strip()
+        contact_number = request.form.get('contact_number', '').strip()
         emergency_contact = request.form.get('emergency_contact', '').strip()
         departments = request.form.getlist('department')
         department = ','.join(departments)
@@ -1843,8 +1847,8 @@ def add_employee():
         other_path = save_uploaded_file(other_file)
         with get_db() as conn:
             conn.execute(
-                "INSERT INTO employees (name, address, education, experience, emergency_contact, department, salary, pan_path, aadhaar_path, other_docs_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (name, address, education, experience, emergency_contact, department, salary, pan_path, aadhaar_path, other_path),
+                "INSERT INTO employees (name, address, education, experience, contact_number, emergency_contact, department, salary, pan_path, aadhaar_path, other_docs_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (name, address, education, experience, contact_number, emergency_contact, department, salary, pan_path, aadhaar_path, other_path),
             )
             conn.commit()
         flash('Employee added.', 'success')
@@ -1883,6 +1887,10 @@ def add_employee():
                             <div class="mb-3">
                                 <label class="form-label">Experience</label>
                                 <input class="form-control" name="experience">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Contact Number</label>
+                                <input class="form-control" name="contact_number">
                             </div>
                             <div class="mb-3">
                                 <label class="form-label">Emergency Contact Number</label>
@@ -1954,6 +1962,7 @@ def view_employee(emp_id):
                             <p><strong>Address:</strong><br>{{ r.address }}</p>
                             <p><strong>Education:</strong> {{ r.education }}</p>
                             <p><strong>Experience:</strong> {{ r.experience }}</p>
+                            <p><strong>Contact Number:</strong> {{ r.contact_number or '' }}</p>
                             <p><strong>Emergency Contact:</strong> {{ r.emergency_contact }}</p>
                             <p><strong>Salary:</strong> {{ r.salary }}</p>
                             <p><strong>PAN:</strong> {% if r.pan_path %}<a href="/{{ r.pan_path }}">Download</a>{% else %}N/A{% endif %}</p>
@@ -1985,6 +1994,7 @@ def edit_employee(emp_id):
             address = request.form.get('address', '').strip()
             education = request.form.get('education', '').strip()
             experience = request.form.get('experience', '').strip()
+            contact_number = request.form.get('contact_number', '').strip()
             emergency_contact = request.form.get('emergency_contact', '').strip()
             departments = request.form.getlist('department')
             department = ','.join(departments)
@@ -2004,9 +2014,9 @@ def edit_employee(emp_id):
             with get_db() as conn:
                 conn.execute(
                     """
-                    UPDATE employees SET name=?, address=?, education=?, experience=?, emergency_contact=?, department=?, salary=?, pan_path=?, aadhaar_path=?, other_docs_path=? WHERE id=?
+                    UPDATE employees SET name=?, address=?, education=?, experience=?, contact_number=?, emergency_contact=?, department=?, salary=?, pan_path=?, aadhaar_path=?, other_docs_path=? WHERE id=?
                     """,
-                    (name, address, education, experience, emergency_contact, department, salary, pan_path, aadhaar_path, other_path, emp_id),
+                    (name, address, education, experience, contact_number, emergency_contact, department, salary, pan_path, aadhaar_path, other_path, emp_id),
                 )
                 conn.commit()
             flash('Employee updated.', 'success')
@@ -2046,6 +2056,10 @@ def edit_employee(emp_id):
                                 <div class="mb-3">
                                     <label class="form-label">Experience</label>
                                     <input class="form-control" name="experience" value="{{ r.experience }}">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Contact Number</label>
+                                    <input class="form-control" name="contact_number" value="{{ r.contact_number or '' }}">
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label">Emergency Contact Number</label>
@@ -2119,15 +2133,13 @@ def admin_clients():
     with get_db() as conn:
         clients = conn.execute('SELECT * FROM clients ORDER BY lower(name), id').fetchall()
     return render_template_string("""
-        <div class="container py-5"><div class="d-flex mb-3"><h1 class="h3 me-auto">Client Management</h1><a class="btn btn-success" href="{{ url_for('add_client') }}">Add New Client</a></div>
-        <table class="table table-striped"><thead><tr><th>Client Name</th><th>City</th><th>Services</th><th>Contact</th><th>Actions</th></tr></thead><tbody>{% for client in clients %}<tr><td>{{ client.name }}</td><td>{{ client.city or '' }}</td><td>{{ client.services or '' }}</td><td>{{ client.contact_number or '' }}</td><td><a class="btn btn-sm btn-primary" href="{{ url_for('edit_client', client_id=client.id) }}">View / Edit</a> <form method="post" action="{{ url_for('delete_client', client_id=client.id) }}" class="d-inline"><button class="btn btn-sm btn-danger">Delete</button></form></td></tr>{% else %}<tr><td colspan="5">No clients found.</td></tr>{% endfor %}</tbody></table></div>
+        <div class="container py-5"><div class="d-flex align-items-center justify-content-between flex-wrap gap-3 mb-4"><div><h1 class="h3 mb-1">Client Management</h1><p class="text-muted mb-0">Manage client details in one place.</p></div><a class="btn btn-success" href="{{ url_for('add_client') }}">Add New Client</a></div><div class="card shadow-sm"><div class="card-body p-0"><div class="table-responsive"><table class="table table-striped table-hover align-middle mb-0"><thead><tr><th>Client Name</th><th>City</th><th>Services</th><th>Contact</th><th class="text-end">Actions</th></tr></thead><tbody>{% for client in clients %}<tr><td class="fw-semibold">{{ client.name }}</td><td>{{ client.city or '—' }}</td><td>{{ client.services or '—' }}</td><td>{{ client.contact_number or '—' }}</td><td class="text-end"><a class="btn btn-sm btn-primary" href="{{ url_for('edit_client', client_id=client.id) }}">View / Edit</a> <form method="post" action="{{ url_for('delete_client', client_id=client.id) }}" class="d-inline"><button class="btn btn-sm btn-outline-danger">Delete</button></form></td></tr>{% else %}<tr><td colspan="5" class="text-center text-muted py-4">No clients found.</td></tr>{% endfor %}</tbody></table></div></div></div></div>
     """, clients=clients)
 
 
 def render_client_form(client=None):
     return render_template_string("""
-        <div class="container py-5"><h1 class="h3">{{ 'Edit Client' if client else 'Add New Client' }}</h1><form method="post" class="card card-body mt-3">
-        <label>Client Name</label><input class="form-control mb-2" name="name" value="{{ client.name if client else '' }}" required><label>Client Address</label><textarea class="form-control mb-2" name="address">{{ client.address if client else '' }}</textarea><label>City</label><input class="form-control mb-2" name="city" value="{{ client.city if client else '' }}"><label>Services</label><input class="form-control mb-2" name="services" value="{{ client.services if client else '' }}"><label>GST Number</label><input class="form-control mb-2" name="gst_number" value="{{ client.gst_number if client else '' }}"><label>Contact Number</label><input class="form-control mb-2" name="contact_number" value="{{ client.contact_number if client else '' }}"><label>Email</label><input class="form-control mb-2" type="email" name="email" value="{{ client.email if client else '' }}"><button class="btn btn-primary">Save Client</button></form></div>
+        <div class="container py-5"><div class="card shadow-sm mx-auto" style="max-width: 800px;"><div class="card-body p-4"><div class="d-flex align-items-center mb-4"><a class="btn btn-outline-secondary me-3" href="{{ url_for('admin_clients') }}">Back</a><div><h1 class="h3 mb-0">{{ 'Edit Client' if client else 'Add New Client' }}</h1><small class="text-muted">Client contact and business information</small></div></div><form method="post"><div class="row g-3"><div class="col-12"><label class="form-label">Client Name</label><input class="form-control" name="name" value="{{ client.name if client else '' }}" required></div><div class="col-md-8"><label class="form-label">Client Address</label><textarea class="form-control" name="address" rows="3">{{ client.address if client else '' }}</textarea></div><div class="col-md-4"><label class="form-label">City</label><input class="form-control" name="city" value="{{ client.city if client else '' }}"></div><div class="col-md-6"><label class="form-label">Services</label><input class="form-control" name="services" value="{{ client.services if client else '' }}"></div><div class="col-md-6"><label class="form-label">GST Number</label><input class="form-control" name="gst_number" value="{{ client.gst_number if client else '' }}"></div><div class="col-md-6"><label class="form-label">Contact Number</label><input class="form-control" name="contact_number" value="{{ client.contact_number if client else '' }}"></div><div class="col-md-6"><label class="form-label">Email</label><input class="form-control" type="email" name="email" value="{{ client.email if client else '' }}"></div><div class="col-12 pt-2"><button class="btn btn-primary">Save Client</button><a class="btn btn-outline-secondary ms-2" href="{{ url_for('admin_clients') }}">Cancel</a></div></div></form></div></div></div>
     """, client=client)
 
 
