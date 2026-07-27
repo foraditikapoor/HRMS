@@ -74,7 +74,6 @@ def send_account_created_email(recipient_email, username, temporary_password):
     message["Subject"] = subject
     message["From"] = MAIL_DEFAULT_SENDER
     message["To"] = recipient_email
-
     try:
         with smtplib.SMTP(MAIL_SERVER, MAIL_PORT, timeout=10) as server:
             server.starttls()
@@ -84,8 +83,6 @@ def send_account_created_email(recipient_email, username, temporary_password):
     except Exception as e:
         print(f"EMAIL ERROR: {e}")
         raise
-
-
 def send_welcome_email(recipient_email, full_name, username, temporary_password):
     """Send a welcome email with login info using Gmail SMTP.
 
