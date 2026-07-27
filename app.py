@@ -104,7 +104,8 @@ logging.basicConfig(level=logging.INFO)
 logging.info(f"MAIL_USERNAME loaded: {'yes' if MAIL_USERNAME else 'no'}")
 logging.info(f"MAIL_PASSWORD loaded: {'yes' if MAIL_PASSWORD else 'no'}")
 
-os.makedirs(app.instance_path, exist_ok=True)
+os.makedirs(app.instance_path, exist_ok=True
+)
 
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
@@ -181,7 +182,7 @@ def send_welcome_email(recipient_email, full_name, username, temporary_password)
         "Your account has been created successfully.\n\n"
         f"Username: {username}\n"
         f"Temporary Password: {temporary_password}\n\n"
-        "Login here:\nhttp://127.0.0.1:5000/login\n\n"
+        "Login here:\nhttps://aditikapoor.pythonanywhere.com/login\n\n"
         "Please change your password after logging in.\n"
     )
     msg = MIMEText(body)
