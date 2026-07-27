@@ -291,6 +291,7 @@ def ensure_projects_table():
 
         columns = {row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
         required_columns = [
+            "client_id",
             "client_name",
             "services",
             "assigned_to",
@@ -303,7 +304,51 @@ def ensure_projects_table():
         ]
         for column_name in required_columns:
             if column_name not in columns:
-                conn.execute(f"ALTER TABLE projects ADD COLUMN {column_name} TEXT")
+                column_type = "INTEGER" if column_name == "client_id" else "TEXT"
+                conn.execute(f"ALTER TABLE projects ADD COLUMN {column_name} {column_type}")
+        conn.commit()
+
+
+def ensure_clients_table():
+    """Create the client source-of-truth table without replacing existing data."""
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS clients (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                address TEXT,
+                city TEXT,
+                services TEXT,
+                gst_number TEXT,
+                contact_number TEXT,
+                email TEXT,
+                website TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_client_id ON projects(client_id)")
+
+        # Safely preserve legacy project client details by converting them to clients.
+        legacy_projects = conn.execute("""
+            SELECT id, client_name, client_address, services, client_gst_number,
+                   whatsapp_number, client_email, client_website
+            FROM projects WHERE client_id IS NULL AND trim(coalesce(client_name, '')) != ''
+        """).fetchall()
+        for project in legacy_projects:
+            client = conn.execute(
+                "SELECT id FROM clients WHERE name = ? ORDER BY id LIMIT 1",
+                (project['client_name'],),
+            ).fetchone()
+            if client is None:
+                cursor = conn.execute("""
+                    INSERT INTO clients (name, address, services, gst_number, contact_number, email, website)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (project['client_name'], project['client_address'], project['services'],
+                      project['client_gst_number'], project['whatsapp_number'],
+                      project['client_email'], project['client_website']))
+                client_id = cursor.lastrowid
+            else:
+                client_id = client['id']
+            conn.execute("UPDATE projects SET client_id = ? WHERE id = ?", (client_id, project['id']))
         conn.commit()
 
 
@@ -407,6 +452,7 @@ def init_db():
         ensure_attendance_table()
         ensure_employee_table()
         ensure_projects_table()
+        ensure_clients_table()
         ensure_tasks_table()
         ensure_time_logs_table()
 
@@ -1012,6 +1058,7 @@ def task_management():
 
     with get_db() as conn:
         employees = conn.execute("SELECT id, name FROM employees ORDER BY name").fetchall()
+        clients = conn.execute("SELECT id, name FROM clients ORDER BY lower(name), id").fetchall()
         projects = conn.execute("SELECT id, client_name FROM projects ORDER BY client_name").fetchall()
 
     employee_filter = request.args.get('employee_filter', '').strip()
@@ -2063,6 +2110,63 @@ def delete_employee(emp_id):
         return redirect(url_for('admin_employees'))
 
 
+@app.route('/admin/clients')
+@login_required
+def admin_clients():
+    if current_user.role != 'admin':
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('dashboard'))
+    with get_db() as conn:
+        clients = conn.execute('SELECT * FROM clients ORDER BY lower(name), id').fetchall()
+    return render_template_string("""
+        <div class="container py-5"><div class="d-flex mb-3"><h1 class="h3 me-auto">Client Management</h1><a class="btn btn-success" href="{{ url_for('add_client') }}">Add New Client</a></div>
+        <table class="table table-striped"><thead><tr><th>Client Name</th><th>City</th><th>Services</th><th>Contact</th><th>Actions</th></tr></thead><tbody>{% for client in clients %}<tr><td>{{ client.name }}</td><td>{{ client.city or '' }}</td><td>{{ client.services or '' }}</td><td>{{ client.contact_number or '' }}</td><td><a class="btn btn-sm btn-primary" href="{{ url_for('edit_client', client_id=client.id) }}">View / Edit</a> <form method="post" action="{{ url_for('delete_client', client_id=client.id) }}" class="d-inline"><button class="btn btn-sm btn-danger">Delete</button></form></td></tr>{% else %}<tr><td colspan="5">No clients found.</td></tr>{% endfor %}</tbody></table></div>
+    """, clients=clients)
+
+
+def render_client_form(client=None):
+    return render_template_string("""
+        <div class="container py-5"><h1 class="h3">{{ 'Edit Client' if client else 'Add New Client' }}</h1><form method="post" class="card card-body mt-3">
+        <label>Client Name</label><input class="form-control mb-2" name="name" value="{{ client.name if client else '' }}" required><label>Client Address</label><textarea class="form-control mb-2" name="address">{{ client.address if client else '' }}</textarea><label>City</label><input class="form-control mb-2" name="city" value="{{ client.city if client else '' }}"><label>Services</label><input class="form-control mb-2" name="services" value="{{ client.services if client else '' }}"><label>GST Number</label><input class="form-control mb-2" name="gst_number" value="{{ client.gst_number if client else '' }}"><label>Contact Number</label><input class="form-control mb-2" name="contact_number" value="{{ client.contact_number if client else '' }}"><label>Email</label><input class="form-control mb-2" type="email" name="email" value="{{ client.email if client else '' }}"><button class="btn btn-primary">Save Client</button></form></div>
+    """, client=client)
+
+
+@app.route('/admin/clients/add', methods=['GET', 'POST'])
+@login_required
+def add_client():
+    if current_user.role != 'admin': return redirect(url_for('dashboard'))
+    if request.method == 'POST':
+        values = [request.form.get(key, '').strip() for key in ('name', 'address', 'city', 'services', 'gst_number', 'contact_number', 'email')]
+        if not values[0]: flash('Client Name is required.', 'danger'); return render_client_form()
+        with get_db() as conn: conn.execute('INSERT INTO clients (name, address, city, services, gst_number, contact_number, email) VALUES (?, ?, ?, ?, ?, ?, ?)', values)
+        return redirect(url_for('admin_clients'))
+    return render_client_form()
+
+
+@app.route('/admin/clients/<int:client_id>', methods=['GET', 'POST'])
+@app.route('/admin/clients/<int:client_id>/edit', methods=['GET', 'POST'])
+@login_required
+def edit_client(client_id):
+    if current_user.role != 'admin': return redirect(url_for('dashboard'))
+    with get_db() as conn:
+        client = conn.execute('SELECT * FROM clients WHERE id = ?', (client_id,)).fetchone()
+        if client is None: flash('Client not found.', 'warning'); return redirect(url_for('admin_clients'))
+        if request.method == 'POST':
+            values = [request.form.get(key, '').strip() for key in ('name', 'address', 'city', 'services', 'gst_number', 'contact_number', 'email')]
+            if not values[0]: flash('Client Name is required.', 'danger'); return render_client_form(client)
+            conn.execute('UPDATE clients SET name=?, address=?, city=?, services=?, gst_number=?, contact_number=?, email=? WHERE id=?', (*values, client_id))
+            return redirect(url_for('admin_clients'))
+    return render_client_form(client)
+
+
+@app.route('/admin/clients/<int:client_id>/delete', methods=['POST'])
+@login_required
+def delete_client(client_id):
+    if current_user.role != 'admin': return redirect(url_for('dashboard'))
+    with get_db() as conn: conn.execute('DELETE FROM clients WHERE id = ?', (client_id,))
+    return redirect(url_for('admin_clients'))
+
+
 @app.route('/admin/projects')
 @login_required
 def admin_projects():
@@ -2078,8 +2182,9 @@ def admin_projects():
 
     per_page = 10
     query = """
-        SELECT id, client_name, assigned_to, services, client_email, whatsapp_number
-        FROM projects
+        SELECT projects.id, clients.name AS client_name, projects.assigned_to, projects.services,
+               clients.email AS client_email, clients.contact_number AS whatsapp_number
+        FROM projects LEFT JOIN clients ON clients.id = projects.client_id
         WHERE 1 = 1
     """
     params = []
@@ -2088,10 +2193,10 @@ def admin_projects():
         search_term = f"%{search.lower()}%"
         query += """
             AND (
-                lower(client_name) LIKE ? OR
-                lower(assigned_to) LIKE ? OR
-                lower(client_email) LIKE ? OR
-                lower(whatsapp_number) LIKE ?
+                lower(coalesce(clients.name, '')) LIKE ? OR
+                lower(coalesce(projects.assigned_to, '')) LIKE ? OR
+                lower(coalesce(clients.email, '')) LIKE ? OR
+                lower(coalesce(clients.contact_number, '')) LIKE ?
             )
         """
         params.extend([search_term, search_term, search_term, search_term])
@@ -2100,7 +2205,7 @@ def admin_projects():
         query += " AND lower(services) LIKE ?"
         params.append(f"%{service_filter.lower()}%")
 
-    query += " ORDER BY lower(client_name) ASC, client_name ASC, id ASC"
+    query += " ORDER BY lower(coalesce(clients.name, '')) ASC, projects.id ASC"
 
     with get_db() as conn:
         all_projects = conn.execute(query, params).fetchall()
@@ -2174,7 +2279,7 @@ def admin_projects():
                                 {% if projects %}
                                     {% for project in projects %}
                                         <tr>
-                                            <td>{{ project.client_name or '' }}</td>
+                                            <td>{{ project.client_name or 'No Client Assigned' }}</td>
                                             <td>{{ project.assigned_to or '' }}</td>
                                             <td>{{ project.services or '' }}</td>
                                             <td>{{ project.client_email or '' }}</td>
@@ -2243,31 +2348,23 @@ def add_project():
 
     with get_db() as conn:
         employees = conn.execute("SELECT id, name FROM employees ORDER BY name").fetchall()
+        clients = conn.execute("SELECT id, name FROM clients ORDER BY lower(name), id").fetchall()
 
     if request.method == 'POST':
-        client_name = request.form.get('client_name', '').strip()
+        client_id = request.form.get('client_id', type=int)
         services = request.form.getlist('services')
         assigned_to = request.form.get('assigned_to', '').strip()
         delivery_details = request.form.get('delivery_details', '').strip()
-        whatsapp_number = request.form.get('whatsapp_number', '').strip()
-        client_email = request.form.get('client_email', '').strip()
-        client_website = request.form.get('client_website', '').strip()
-        client_address = request.form.get('client_address', '').strip()
-        client_gst_number = request.form.get('client_gst_number', '').strip()
 
         required_fields = [
-            ('Client Name', client_name),
+            ('Client', client_id),
             ('Services', services),
             ('Assigned To', assigned_to),
             ('Delivery Details', delivery_details),
-            ('Client WhatsApp Number', whatsapp_number),
-            ('Client Email', client_email),
-            ('Client Website', client_website),
-            ('Client Address', client_address),
-            ('Client GST Number', client_gst_number),
         ]
         if any(not value for _, value in required_fields):
             flash('All fields are required.', 'danger')
+            return redirect(url_for('add_project'))
             return render_template_string(
                 """
                 <!doctype html>
@@ -2364,27 +2461,17 @@ def add_project():
             conn.execute(
                 """
                 INSERT INTO projects (
-                    client_name,
+                    client_id,
                     services,
                     assigned_to,
-                    delivery_details,
-                    whatsapp_number,
-                    client_email,
-                    client_website,
-                    client_address,
-                    client_gst_number
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    delivery_details
+                ) VALUES (?, ?, ?, ?)
                 """,
                 (
-                    client_name,
+                    client_id,
                     services_text,
                     assigned_to,
                     delivery_details,
-                    whatsapp_number,
-                    client_email,
-                    client_website,
-                    client_address,
-                    client_gst_number,
                 ),
             )
             conn.commit()
@@ -2416,8 +2503,8 @@ def add_project():
                         {% endwith %}
                         <form method="post">
                             <div class="mb-3">
-                                <label class="form-label">Client Name</label>
-                                <input class="form-control" name="client_name" required>
+                                <label class="form-label">Client</label>
+                                <select class="form-select" name="client_id" required><option value="">Select client</option>{% for client in clients %}<option value="{{ client.id }}">{{ client.name }}</option>{% endfor %}</select>
                             </div>
                             <div class="mb-3">
                                 <label class="form-label">Services</label><br>
@@ -2440,7 +2527,7 @@ def add_project():
                                 <label class="form-label">Delivery Details</label>
                                 <textarea class="form-control" name="delivery_details" rows="3" required></textarea>
                             </div>
-                            <div class="mb-3">
+                            {% if false %}<div class="mb-3">
                                 <label class="form-label">Client WhatsApp Number</label>
                                 <input class="form-control" name="whatsapp_number" required>
                             </div>
@@ -2459,7 +2546,7 @@ def add_project():
                             <div class="mb-3">
                                 <label class="form-label">Client GST Number</label>
                                 <input class="form-control" name="client_gst_number" required>
-                            </div>
+                            </div>{% endif %}
                             <button class="btn btn-primary" type="submit">Save Project</button>
                             <a class="btn btn-outline-secondary ms-2" href="{{ url_for('admin_projects') }}">Back</a>
                         </form>
@@ -2470,6 +2557,7 @@ def add_project():
         </html>
         """,
         employees=employees,
+        clients=clients,
     )
 
 
@@ -2479,6 +2567,11 @@ def view_project(project_id):
     if current_user.role != 'admin':
         flash('Admin access required.', 'danger')
         return redirect(url_for('dashboard'))
+    with get_db() as conn:
+        project = conn.execute("SELECT projects.*, clients.name AS linked_client_name, clients.address AS linked_client_address, clients.city AS linked_client_city, clients.email AS linked_client_email, clients.contact_number AS linked_client_contact FROM projects LEFT JOIN clients ON clients.id = projects.client_id WHERE projects.id = ?", (project_id,)).fetchone()
+    if project is None:
+        flash('Project not found.', 'warning')
+        return redirect(url_for('admin_projects'))
     return render_template_string(
         """
         <!doctype html>
@@ -2497,13 +2590,14 @@ def view_project(project_id):
                             <a class="btn btn-outline-secondary me-3" href="{{ url_for('admin_projects') }}">Back</a>
                             <h1 class="h3 mb-0">View Project</h1>
                         </div>
-                        <p class="text-muted">Project details will be shown here later.</p>
+                        <p><strong>Client:</strong> {{ project.linked_client_name or 'No Client Assigned' }}</p>
+                        {% if project.linked_client_name %}<p><strong>Address:</strong> {{ project.linked_client_address or '' }}{% if project.linked_client_city %}, {{ project.linked_client_city }}{% endif %}</p><p><strong>Email:</strong> {{ project.linked_client_email or '' }}</p><p><strong>Contact:</strong> {{ project.linked_client_contact or '' }}</p>{% endif %}
                     </div>
                 </div>
             </div>
         </body>
         </html>
-        """
+        """, project=project
     )
 
 
@@ -2520,6 +2614,7 @@ def edit_project(project_id):
             (project_id,),
         ).fetchone()
         employees = conn.execute("SELECT id, name FROM employees ORDER BY name").fetchall()
+        clients = conn.execute("SELECT id, name FROM clients ORDER BY lower(name), id").fetchall()
 
     if project is None:
         flash('Project not found.', 'warning')
@@ -2530,7 +2625,7 @@ def edit_project(project_id):
         current_services = [item.strip() for item in str(project['services']).split(',') if item.strip()]
 
     if request.method == 'POST':
-        client_name = request.form.get('client_name', '').strip()
+        client_id = request.form.get('client_id', type=int)
         services = request.form.getlist('services')
         assigned_to = request.form.get('assigned_to', '').strip()
         delivery_details = request.form.get('delivery_details', '').strip()
@@ -2541,15 +2636,10 @@ def edit_project(project_id):
         client_gst_number = request.form.get('client_gst_number', '').strip()
 
         required_fields = [
-            ('Client Name', client_name),
+            ('Client', client_id),
             ('Services', services),
             ('Assigned To', assigned_to),
             ('Delivery Details', delivery_details),
-            ('Client WhatsApp Number', whatsapp_number),
-            ('Client Email', client_email),
-            ('Client Website', client_website),
-            ('Client Address', client_address),
-            ('Client GST Number', client_gst_number),
         ]
         if any(not value for _, value in required_fields):
             flash('All fields are required.', 'danger')
@@ -2647,27 +2737,18 @@ def edit_project(project_id):
             conn.execute(
                 """
                 UPDATE projects
-                SET client_name = ?,
+                SET client_id = ?,
                     services = ?,
                     assigned_to = ?,
                     delivery_details = ?,
-                    whatsapp_number = ?,
-                    client_email = ?,
-                    client_website = ?,
-                    client_address = ?,
-                    client_gst_number = ?
+                    client_name = client_name
                 WHERE id = ?
                 """,
                 (
-                    client_name,
+                    client_id,
                     services_text,
                     assigned_to,
                     delivery_details,
-                    whatsapp_number,
-                    client_email,
-                    client_website,
-                    client_address,
-                    client_gst_number,
                     project_id,
                 ),
             )
@@ -2703,8 +2784,8 @@ def edit_project(project_id):
                         {% endwith %}
                         <form method="post">
                             <div class="mb-3">
-                                <label class="form-label">Client Name</label>
-                                <input class="form-control" name="client_name" value="{{ project.client_name or '' }}" required>
+                                <label class="form-label">Client</label>
+                                <select class="form-select" name="client_id" required><option value="">Select client</option>{% for client in clients %}<option value="{{ client.id }}" {% if client.id == project.client_id %}selected{% endif %}>{{ client.name }}</option>{% endfor %}</select>
                             </div>
                             <div class="mb-3">
                                 <label class="form-label">Services</label><br>
@@ -2727,7 +2808,7 @@ def edit_project(project_id):
                                 <label class="form-label">Delivery Details</label>
                                 <textarea class="form-control" name="delivery_details" rows="3" required>{{ project.delivery_details or '' }}</textarea>
                             </div>
-                            <div class="mb-3">
+                            {% if false %}<div class="mb-3">
                                 <label class="form-label">Client WhatsApp Number</label>
                                 <input class="form-control" name="whatsapp_number" value="{{ project.whatsapp_number or '' }}" required>
                             </div>
@@ -2746,7 +2827,7 @@ def edit_project(project_id):
                             <div class="mb-3">
                                 <label class="form-label">Client GST Number</label>
                                 <input class="form-control" name="client_gst_number" value="{{ project.client_gst_number or '' }}" required>
-                            </div>
+                            </div>{% endif %}
                             <button class="btn btn-primary" type="submit">Save Changes</button>
                         </form>
                     </div>
@@ -2757,6 +2838,7 @@ def edit_project(project_id):
         """,
         project=project,
         employees=employees,
+        clients=clients,
         current_services=current_services,
     )
 
