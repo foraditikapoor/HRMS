@@ -185,6 +185,7 @@ def send_welcome_email(recipient_email, full_name, username, temporary_password)
     msg["From"] = EMAIL_ADDRESS
     msg["To"] = recipient_email
     try:
+        print(f"DEBUG SMTP: {MAIL_SERVER}:{MAIL_PORT}")
         with smtplib.SMTP(MAIL_SERVER, MAIL_PORT, timeout=10) as server:
             server.starttls()
             server.login(MAIL_USERNAME, MAIL_PASSWORD)
