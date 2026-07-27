@@ -1487,7 +1487,7 @@ def create_user():
 
         if not full_name or not email or not username or not role:
             message = "All fields are required."
-        elif role not in {"user", "admin"}:
+        elif role not in {"employee", "user", "admin"}:
             message = "Invalid role selected."
         else:
             with get_db() as conn:
@@ -1503,10 +1503,11 @@ def create_user():
                         "INSERT INTO users (username, password_hash, role, full_name, email, force_password_change) VALUES (?, ?, ?, ?, ?, ?)",
                         (username, generate_password_hash(temp_password), role, full_name, email, 1),
                     )
-                    conn.execute(
-                        "INSERT INTO employees (user_id, name) VALUES (?, ?)",
-                        (cursor.lastrowid, full_name),
-                    )
+                    if role == "employee":
+                        conn.execute(
+                            "INSERT INTO employees (user_id, name) VALUES (?, ?)",
+                            (cursor.lastrowid, full_name),
+                        )
                     conn.commit()
                     send_welcome_email(email, full_name, username, temp_password)
                     message = (
@@ -1552,7 +1553,8 @@ def create_user():
                             <div class="mb-3">
                                 <label class="form-label">Role</label>
                                 <select class="form-select" name="role" required>
-                                    <option value="user" selected>User</option>
+                                    <option value="employee" selected>Employee</option>
+                                    <option value="user">User</option>
                                     <option value="admin">Admin</option>
                                 </select>
                             </div>
@@ -1729,7 +1731,7 @@ def admin_employees():
                 <div class="d-flex align-items-center mb-3">
                     <a class="btn btn-outline-secondary me-3" href="{{ url_for('dashboard') }}">Back</a>
                     <h1 class="h3 me-auto mb-0">Employee Management</h1>
-                    <a class="btn btn-success" href="{{ url_for('add_employee') }}">Add Employee</a>
+                    <a class="btn btn-success" href="{{ url_for('create_user') }}">Create User</a>
                 </div>
                 <div class="card shadow-sm">
                     <div class="card-body">
