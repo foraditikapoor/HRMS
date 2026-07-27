@@ -235,7 +235,7 @@ def ensure_attendance_table():
 def ensure_employee_table():
     """Create employee table if it does not exist.
 
-    Fields: name, address, education, experience, emergency_contact,
+    Fields: user_id, name, address, education, experience, emergency_contact,
     department (comma-separated), salary, pan_path, aadhaar_path, other_docs_path
     """
     with get_db() as conn:
@@ -243,6 +243,7 @@ def ensure_employee_table():
             """
             CREATE TABLE IF NOT EXISTS employees (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
                 name TEXT NOT NULL,
                 address TEXT,
                 education TEXT,
@@ -255,6 +256,14 @@ def ensure_employee_table():
                 other_docs_path TEXT
             )
             """
+        )
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(employees)").fetchall()}
+        if "user_id" not in columns:
+            conn.execute("ALTER TABLE employees ADD COLUMN user_id INTEGER")
+        # Existing employee records have no linked user and remain untouched.
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_user_id "
+            "ON employees(user_id) WHERE user_id IS NOT NULL"
         )
         conn.commit()
 
@@ -1474,9 +1483,12 @@ def create_user():
         full_name = request.form.get("full_name", "").strip()
         email = request.form.get("email", "").strip()
         username = request.form.get("username", "").strip()
+        role = request.form.get("role", "").strip()
 
-        if not full_name or not email or not username:
+        if not full_name or not email or not username or not role:
             message = "All fields are required."
+        elif role not in {"user", "admin"}:
+            message = "Invalid role selected."
         else:
             with get_db() as conn:
                 existing = conn.execute(
@@ -1487,9 +1499,13 @@ def create_user():
                     message = "Username already exists."
                 else:
                     temp_password = secrets.token_urlsafe(12)
-                    conn.execute(
+                    cursor = conn.execute(
                         "INSERT INTO users (username, password_hash, role, full_name, email, force_password_change) VALUES (?, ?, ?, ?, ?, ?)",
-                        (username, generate_password_hash(temp_password), "user", full_name, email, 1),
+                        (username, generate_password_hash(temp_password), role, full_name, email, 1),
+                    )
+                    conn.execute(
+                        "INSERT INTO employees (user_id, name) VALUES (?, ?)",
+                        (cursor.lastrowid, full_name),
                     )
                     conn.commit()
                     send_welcome_email(email, full_name, username, temp_password)
@@ -1532,6 +1548,13 @@ def create_user():
                             <div class="mb-3">
                                 <label class="form-label">Username</label>
                                 <input class="form-control" name="username" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Role</label>
+                                <select class="form-select" name="role" required>
+                                    <option value="user" selected>User</option>
+                                    <option value="admin">Admin</option>
+                                </select>
                             </div>
                             <button class="btn btn-primary" type="submit">Create User</button>
                         </form>
