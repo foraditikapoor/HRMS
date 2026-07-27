@@ -166,8 +166,6 @@ def save_uploaded_file(file_storage):
 
 
 def send_welcome_email(recipient_email, full_name, username, temporary_password):
-    server.send_message(msg)
-    print("DEBUG: Welcome email sent successfully")
     """Send a welcome email with login info using Gmail SMTP.
 
     Uses `EMAIL_ADDRESS` and `EMAIL_APP_PASSWORD` for authentication.
@@ -182,17 +180,16 @@ def send_welcome_email(recipient_email, full_name, username, temporary_password)
         "Login here:\nhttp://127.0.0.1:5000/login\n\n"
         "Please change your password after logging in.\n"
     )
-    message = MIMEText(body)
-    message["Subject"] = subject
-    message["From"] = EMAIL_ADDRESS
-    message["To"] = recipient_email
-
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_ADDRESS
+    msg["To"] = recipient_email
     try:
-    with smtplib.SMTP(MAIL_SERVER, MAIL_PORT, timeout=10) as server:
-        server.starttls()
-        server.login(MAIL_USERNAME, MAIL_PASSWORD)
-        server.send_message(msg)
-    print("DEBUG: Welcome email sent successfully")
+        with smtplib.SMTP(MAIL_SERVER, MAIL_PORT, timeout=10) as server:
+            server.starttls()
+            server.login(MAIL_USERNAME, MAIL_PASSWORD)
+            server.send_message(msg)
+        print("DEBUG: Welcome email sent successfully")
     except Exception:
         traceback.print_exc()
 
