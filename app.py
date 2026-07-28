@@ -2351,9 +2351,67 @@ def admin_projects():
     )
 
 
+def render_project_form(project=None, clients=None, employees=None):
+    return render_template_string("""
+        <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{ 'Edit Project' if project else 'Add Project' }}</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light"><div class="container py-5"><div class="card shadow-sm mx-auto" style="max-width: 900px;"><div class="card-body"><div class="d-flex align-items-center mb-3"><a class="btn btn-outline-secondary me-3" href="{{ url_for('admin_projects') }}">Back</a><h1 class="h3 mb-0">{{ 'Edit Project' if project else 'Add Project' }}</h1></div><form method="post"><div class="mb-3"><label class="form-label">Client</label><select class="form-select" name="client_id" required><option value="">Select client</option>{% for client in clients %}<option value="{{ client.id }}" {% if project and client.id == project.client_id %}selected{% endif %}>{{ client.name }}</option>{% endfor %}</select></div><div class="mb-3"><label class="form-label">Services</label><br>{% for service in ['Social Media', 'SEO', 'Meta Ads', 'Google Ads', 'Website Development'] %}<label class="form-check form-check-inline"><input class="form-check-input" type="checkbox" name="services" value="{{ service }}" {% if project and service in current_services %}checked{% endif %}> {{ service }}</label>{% endfor %}</div><div class="mb-3"><label class="form-label">Assigned To</label><select class="form-select" name="assigned_to" required><option value="">Select employee</option>{% for employee in employees %}<option value="{{ employee.name }}" {% if project and employee.name == project.assigned_to %}selected{% endif %}>{{ employee.name }}</option>{% endfor %}</select></div><div class="mb-3"><label class="form-label">Delivery Details</label><textarea class="form-control" name="delivery_details" rows="3" required>{{ project.delivery_details if project else '' }}</textarea></div><button class="btn btn-primary" type="submit">{{ 'Save Changes' if project else 'Save Project' }}</button></form></div></div></div></body></html>
+    """, project=project, clients=clients, employees=employees,
+        current_services=(project['services'] or '').split(',') if project else [])
+
+
 @app.route('/admin/projects/add', methods=['GET', 'POST'])
 @login_required
 def add_project():
+    if current_user.role != 'admin':
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('dashboard'))
+    with get_db() as conn:
+        clients = conn.execute('SELECT id, name FROM clients ORDER BY lower(name), id').fetchall()
+        employees = conn.execute('SELECT id, name FROM employees ORDER BY name').fetchall()
+        if request.method == 'POST':
+            client_id = request.form.get('client_id', type=int)
+            services = request.form.getlist('services')
+            assigned_to = request.form.get('assigned_to', '').strip()
+            delivery_details = request.form.get('delivery_details', '').strip()
+            if not client_id or not services or not assigned_to or not delivery_details:
+                flash('All fields are required.', 'danger')
+                return render_project_form(None, clients, employees)
+            conn.execute('INSERT INTO projects (client_id, services, assigned_to, delivery_details) VALUES (?, ?, ?, ?)', (client_id, ','.join(services), assigned_to, delivery_details))
+            conn.commit()
+    flash('Project created successfully.', 'success')
+    return redirect(url_for('admin_projects'))
+
+
+@app.route('/admin/projects/<int:project_id>/edit', methods=['GET', 'POST'])
+@login_required
+def edit_project(project_id):
+    if current_user.role != 'admin':
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('dashboard'))
+    with get_db() as conn:
+        project = conn.execute('SELECT * FROM projects WHERE id = ?', (project_id,)).fetchone()
+        if project is None:
+            flash('Project not found.', 'warning')
+            return redirect(url_for('admin_projects'))
+        clients = conn.execute('SELECT id, name FROM clients ORDER BY lower(name), id').fetchall()
+        employees = conn.execute('SELECT id, name FROM employees ORDER BY name').fetchall()
+        if request.method == 'POST':
+            client_id = request.form.get('client_id', type=int)
+            services = request.form.getlist('services')
+            assigned_to = request.form.get('assigned_to', '').strip()
+            delivery_details = request.form.get('delivery_details', '').strip()
+            if not client_id or not services or not assigned_to or not delivery_details:
+                flash('All fields are required.', 'danger')
+                return render_project_form(project, clients, employees)
+            conn.execute('UPDATE projects SET client_id=?, services=?, assigned_to=?, delivery_details=? WHERE id=?', (client_id, ','.join(services), assigned_to, delivery_details, project_id))
+            conn.commit()
+            flash('Project updated successfully.', 'success')
+            return redirect(url_for('admin_projects'))
+    return render_project_form(project, clients, employees)
+
+
+@app.route('/admin/projects/add/legacy', methods=['GET', 'POST'])
+@login_required
+def legacy_add_project():
     if current_user.role != 'admin':
         flash('Admin access required.', 'danger')
         return redirect(url_for('dashboard'))
@@ -2613,9 +2671,9 @@ def view_project(project_id):
     )
 
 
-@app.route('/admin/projects/<int:project_id>/edit', methods=['GET', 'POST'])
+@app.route('/admin/projects/<int:project_id>/edit/legacy', methods=['GET', 'POST'])
 @login_required
-def edit_project(project_id):
+def legacy_edit_project(project_id):
     if current_user.role != 'admin':
         flash('Admin access required.', 'danger')
         return redirect(url_for('dashboard'))
