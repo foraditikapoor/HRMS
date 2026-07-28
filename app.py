@@ -2389,6 +2389,8 @@ def add_project():
     with get_db() as conn:
         clients = conn.execute('SELECT id, name FROM clients ORDER BY lower(name), id').fetchall()
         employees = conn.execute('SELECT id, name FROM employees ORDER BY name').fetchall()
+        if request.method == 'GET':
+            return render_project_form(None, clients, employees)
         if request.method == 'POST':
             client_id = request.form.get('client_id', type=int)
             services = request.form.getlist('services')
