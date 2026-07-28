@@ -1062,7 +1062,12 @@ def task_management():
     with get_db() as conn:
         employees = conn.execute("SELECT id, name FROM employees ORDER BY name").fetchall()
         clients = conn.execute("SELECT id, name FROM clients ORDER BY lower(name), id").fetchall()
-        projects = conn.execute("SELECT id, client_name FROM projects ORDER BY client_name").fetchall()
+        projects = conn.execute("""
+            SELECT projects.id, clients.name AS client_name
+            FROM projects
+            LEFT JOIN clients ON clients.id = projects.client_id
+            ORDER BY clients.name
+        """).fetchall()
 
     employee_filter = request.args.get('employee_filter', '').strip()
     project_filter = request.args.get('project_filter', '').strip()
