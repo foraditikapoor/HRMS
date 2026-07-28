@@ -2133,13 +2133,35 @@ def admin_clients():
     with get_db() as conn:
         clients = conn.execute('SELECT * FROM clients ORDER BY lower(name), id').fetchall()
     return render_template_string("""
+        <!doctype html>
+        <html lang="en">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Client Management</title>
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        </head>
+        <body class="bg-light">
         <div class="container py-5"><div class="d-flex align-items-center mb-3"><a class="btn btn-outline-secondary me-3" href="{{ url_for('dashboard') }}">Back</a><h1 class="h3 me-auto mb-0">Client Management</h1><a class="btn btn-success" href="{{ url_for('add_client') }}">Add New Client</a></div><div class="card shadow-sm"><div class="card-body"><div class="table-responsive"><table class="table table-striped align-middle mb-0"><thead><tr><th>Client Name</th><th>City</th><th>Services</th><th>Contact</th><th>Actions</th></tr></thead><tbody>{% for client in clients %}<tr><td>{{ client.name }}</td><td>{{ client.city or '' }}</td><td>{{ client.services or '' }}</td><td>{{ client.contact_number or '' }}</td><td><a class="btn btn-sm btn-primary" href="{{ url_for('edit_client', client_id=client.id) }}">View</a><a class="btn btn-sm btn-secondary" href="{{ url_for('edit_client', client_id=client.id) }}">Edit</a><form method="post" action="{{ url_for('delete_client', client_id=client.id) }}" class="d-inline"><button class="btn btn-sm btn-danger">Delete</button></form></td></tr>{% else %}<tr><td colspan="5"><div class="alert alert-info mb-0">No clients found.</div></td></tr>{% endfor %}</tbody></table></div></div></div></div>
+        </body>
+        </html>
     """, clients=clients)
 
 
 def render_client_form(client=None):
     return render_template_string("""
+        <!doctype html>
+        <html lang="en">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>{{ 'Edit Client' if client else 'Add Client' }}</title>
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        </head>
+        <body class="bg-light">
         <div class="container py-5"><div class="row justify-content-center"><div class="col-lg-9"><div class="card shadow-sm"><div class="card-body"><div class="d-flex align-items-center mb-3"><a class="btn btn-outline-secondary me-3" href="{{ url_for('admin_clients') }}">Back</a><h1 class="h3 mb-0">{{ 'Edit Client' if client else 'Add New Client' }}</h1></div><form method="post"><div class="row"><div class="col-md-6 mb-3"><label class="form-label">Client Name</label><input class="form-control" name="name" value="{{ client.name if client else '' }}" required></div><div class="col-md-6 mb-3"><label class="form-label">City</label><input class="form-control" name="city" value="{{ client.city if client else '' }}"></div><div class="col-12 mb-3"><label class="form-label">Client Address</label><textarea class="form-control" name="address" rows="3">{{ client.address if client else '' }}</textarea></div><div class="col-md-6 mb-3"><label class="form-label">Services</label><input class="form-control" name="services" value="{{ client.services if client else '' }}"></div><div class="col-md-6 mb-3"><label class="form-label">GST Number</label><input class="form-control" name="gst_number" value="{{ client.gst_number if client else '' }}"></div><div class="col-md-6 mb-3"><label class="form-label">Contact Number</label><input class="form-control" name="contact_number" value="{{ client.contact_number if client else '' }}"></div><div class="col-md-6 mb-3"><label class="form-label">Email</label><input class="form-control" type="email" name="email" value="{{ client.email if client else '' }}"></div></div><button class="btn btn-primary" type="submit">Save Client</button><a class="btn btn-outline-secondary ms-2" href="{{ url_for('admin_clients') }}">Cancel</a></form></div></div></div></div></div>
+        </body>
+        </html>
     """, client=client)
 
 
