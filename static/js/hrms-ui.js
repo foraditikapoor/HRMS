@@ -37,7 +37,7 @@
   });
 
   function fetchNotifications() {
-    fetch('/api/notifications')
+    fetch('/api/notifications?unread_only=1')
       .then(res => res.json())
       .then(data => {
         const notifBadge = document.getElementById('notifBadge');
@@ -58,16 +58,16 @@
 
         if (data.notifications && data.notifications.length > 0) {
           notifList.innerHTML = data.notifications.map(n => `
-            <a href="${n.link || '/notifications'}" onclick="markNotificationRead(event, ${n.id}, '${n.link || ''}')" class="list-group-item list-group-item-action p-3 border-bottom ${!n.is_read ? 'bg-light' : ''}">
+            <a href="${n.link || '/notifications'}" onclick="markNotificationRead(event, ${n.id}, '${n.link || ''}')" class="list-group-item list-group-item-action p-3 border-bottom bg-light">
               <div class="d-flex w-100 justify-content-between align-items-center mb-1">
-                <strong class="mb-0 small text-dark ${!n.is_read ? 'fw-bold text-primary' : ''}">${escapeHtml(n.title)}</strong>
+                <strong class="mb-0 small text-dark fw-bold text-primary">${escapeHtml(n.title)}</strong>
                 <small class="text-muted" style="font-size: 11px;">${escapeHtml(n.created_at)}</small>
               </div>
               <p class="mb-0 text-secondary" style="font-size: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${escapeHtml(n.message)}</p>
             </a>
           `).join('');
         } else {
-          notifList.innerHTML = '<div class="text-center py-4 text-muted small"><i class="bi bi-bell-slash d-block mb-1 fs-5"></i>No notifications yet</div>';
+          notifList.innerHTML = '<div class="text-center py-4 text-muted small"><i class="bi bi-bell-slash d-block mb-1 fs-5"></i>No unread notifications</div>';
         }
       })
       .catch(err => console.error('Failed to fetch notifications:', err));
@@ -79,10 +79,38 @@
   }
 
   window.markNotificationRead = function(event, notifId, targetUrl) {
+    // Immediate optimistic removal from active dropdown
+    const itemEl = event.currentTarget;
+    if (itemEl && itemEl.parentNode) {
+      itemEl.remove();
+    }
+    const notifBadge = document.getElementById('notifBadge');
+    const notifDot = document.getElementById('notifDot');
+    const notifList = document.getElementById('notifDropdownList');
+
+    if (notifBadge) {
+      let count = parseInt(notifBadge.textContent) || 0;
+      count = Math.max(0, count - 1);
+      if (count > 0) {
+        notifBadge.textContent = count > 99 ? '99+' : count;
+      } else {
+        notifBadge.classList.add('d-none');
+        if (notifDot) notifDot.classList.add('d-none');
+      }
+    }
+
+    if (notifList && notifList.children.length === 0) {
+      notifList.innerHTML = '<div class="text-center py-4 text-muted small"><i class="bi bi-bell-slash d-block mb-1 fs-5"></i>No unread notifications</div>';
+    }
+
+    // Persist mark as read on server
     fetch('/api/notifications/' + notifId + '/read', { method: 'POST' })
       .then(() => {
-        if (targetUrl) window.location.href = targetUrl;
-        else fetchNotifications();
+        if (targetUrl && targetUrl !== '#' && targetUrl !== 'javascript:void(0)') {
+          window.location.href = targetUrl;
+        } else {
+          fetchNotifications();
+        }
       });
   };
 

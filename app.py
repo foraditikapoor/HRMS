@@ -6228,17 +6228,19 @@ def reports_projects():
 @app.route('/api/notifications')
 @login_required
 def api_get_notifications():
+    unread_only = request.args.get('unread_only', '1') == '1'
     with get_db() as conn:
-        rows = conn.execute(
-            """
+        query = """
             SELECT id, title, message, link, is_read, created_at
             FROM notifications
             WHERE user_id = ?
-            ORDER BY id DESC
-            LIMIT 15
-            """,
-            (current_user.id,)
-        ).fetchall()
+        """
+        params = [current_user.id]
+        if unread_only:
+            query += " AND is_read = 0"
+
+        query += " ORDER BY id DESC LIMIT 15"
+        rows = conn.execute(query, params).fetchall()
 
         unread_count = conn.execute(
             "SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0",
