@@ -33,7 +33,7 @@ import sqlite3
 import traceback
 from email.mime.text import MIMEText
 
-from flask import Flask, flash, redirect, render_template_string, request, url_for, Response
+from flask import Flask, flash, jsonify, redirect, render_template_string, request, url_for, Response
 from flask_login import (
     LoginManager,
     UserMixin,
@@ -88,8 +88,8 @@ MAIL_SERVER = "smtp.gmail.com"
 MAIL_PORT = 587
 MAIL_USE_TLS = True
 # Enter your Gmail address and App Password here (no env vars)
-MAIL_USERNAME = os.getenv("MAIL_USERNAME")
-MAIL_PASSWORD = os.getenv("MAIL_PASSWORD")
+MAIL_USERNAME = os.getenv("MAIL_USERNAME") or ""
+MAIL_PASSWORD = os.getenv("MAIL_PASSWORD") or ""
 MAIL_DEFAULT_SENDER = MAIL_USERNAME
 
 # Mirror variables required by the email function
@@ -108,7 +108,7 @@ os.makedirs(app.instance_path, exist_ok=True
 )
 
 login_manager = LoginManager(app)
-login_manager.login_view = "login"
+login_manager.login_view = "login"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 class User(UserMixin):
@@ -437,6 +437,32 @@ def ensure_time_logs_table():
         conn.commit()
 
 
+def ensure_leave_requests_table():
+    """Create leave_requests table if it does not exist."""
+    with get_db() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS leave_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                employee_name TEXT NOT NULL,
+                leave_type TEXT NOT NULL,
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL,
+                total_days REAL NOT NULL,
+                reason TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'Pending',
+                applied_date TEXT NOT NULL,
+                approved_by TEXT,
+                approval_date TEXT,
+                comments TEXT,
+                rejection_reason TEXT
+            )
+            """
+        )
+        conn.commit()
+
+
 def init_db():
     with get_db() as conn:
         conn.execute(
@@ -458,6 +484,7 @@ def init_db():
         ensure_clients_table()
         ensure_tasks_table()
         ensure_time_logs_table()
+        ensure_leave_requests_table()
 
         admin_exists = conn.execute(
             "SELECT COUNT(*) FROM users WHERE username = ?",
@@ -1069,10 +1096,10 @@ def task_management():
             ORDER BY clients.name
         """).fetchall()
 
-    employee_filter = request.args.get('employee_filter', '').strip()
-    project_filter = request.args.get('project_filter', '').strip()
-    status_filter = request.args.get('status_filter', '').strip()
-    edit_id = request.args.get('edit_id', '').strip()
+    employee_filter = (request.args.get('employee_filter') or '').strip()
+    project_filter = (request.args.get('project_filter') or '').strip()
+    status_filter = (request.args.get('status_filter') or '').strip()
+    edit_id = (request.args.get('edit_id') or '').strip()
 
     edit_task = None
     if edit_id:
@@ -2213,8 +2240,8 @@ def admin_projects():
         flash('Admin access required.', 'danger')
         return redirect(url_for('dashboard'))
 
-    search = request.args.get('search', '').strip()
-    service_filter = request.args.get('service_filter', 'All').strip()
+    search = (request.args.get('search') or '').strip()
+    service_filter = (request.args.get('service_filter') or 'All').strip()
     page = request.args.get('page', 1, type=int)
     if page < 1:
         page = 1
@@ -2725,14 +2752,15 @@ def legacy_edit_project(project_id):
 
     if request.method == 'POST':
         client_id = request.form.get('client_id', type=int)
+        client_name = (request.form.get('client_name') or '').strip()
         services = request.form.getlist('services')
-        assigned_to = request.form.get('assigned_to', '').strip()
-        delivery_details = request.form.get('delivery_details', '').strip()
-        whatsapp_number = request.form.get('whatsapp_number', '').strip()
-        client_email = request.form.get('client_email', '').strip()
-        client_website = request.form.get('client_website', '').strip()
-        client_address = request.form.get('client_address', '').strip()
-        client_gst_number = request.form.get('client_gst_number', '').strip()
+        assigned_to = (request.form.get('assigned_to') or '').strip()
+        delivery_details = (request.form.get('delivery_details') or '').strip()
+        whatsapp_number = (request.form.get('whatsapp_number') or '').strip()
+        client_email = (request.form.get('client_email') or '').strip()
+        client_website = (request.form.get('client_website') or '').strip()
+        client_address = (request.form.get('client_address') or '').strip()
+        client_gst_number = (request.form.get('client_gst_number') or '').strip()
 
         required_fields = [
             ('Client', client_id),
@@ -3019,6 +3047,7 @@ def download_attendance():
 
     wb = Workbook()
     ws = wb.active
+    assert ws is not None
     ws.title = 'Attendance'
     headers = ['Username', 'Date', 'Punch In', 'Punch Out', 'Total Hours']
     ws.append(headers)
@@ -3035,6 +3064,790 @@ def download_attendance():
         'Content-Length': str(len(payload)),
     }
     return Response(payload, headers=headers)
+
+
+# Helper to retrieve employee display name
+def get_employee_name_for_user(conn, user_id, fallback_name):
+    emp = conn.execute("SELECT name FROM employees WHERE user_id = ?", (user_id,)).fetchone()
+    if emp and emp['name']:
+        return str(emp['name'])
+    usr = conn.execute("SELECT full_name FROM users WHERE id = ?", (user_id,)).fetchone()
+    if usr and usr['full_name']:
+        return str(usr['full_name'])
+    return str(fallback_name)
+
+
+# Leave Management Module Routes
+
+@app.route('/leave/apply', methods=['GET', 'POST'])
+@login_required
+def apply_leave():
+    if request.method == 'POST':
+        # Accept form data or JSON body
+        if request.is_json and request.json:
+            data = request.json
+            leave_type = str(data.get('leave_type', '')).strip()
+            start_date_str = str(data.get('start_date', '')).strip()
+            end_date_str = str(data.get('end_date', '')).strip()
+            reason = str(data.get('reason', '')).strip()
+        else:
+            leave_type = (request.form.get('leave_type') or '').strip()
+            start_date_str = (request.form.get('start_date') or '').strip()
+            end_date_str = (request.form.get('end_date') or '').strip()
+            reason = (request.form.get('reason') or '').strip()
+
+        if not leave_type or not start_date_str or not end_date_str or not reason:
+            msg = 'All fields (leave_type, start_date, end_date, reason) are required.'
+            flash(msg, 'danger')
+            if request.is_json:
+                return jsonify({'status': 'error', 'message': msg}), 400
+            return redirect(url_for('apply_leave'))
+
+        try:
+            start_date = datetime.datetime.strptime(start_date_str, '%Y-%m-%d').date()
+            end_date = datetime.datetime.strptime(end_date_str, '%Y-%m-%d').date()
+        except ValueError:
+            msg = 'Invalid date format. Use YYYY-MM-DD.'
+            flash(msg, 'danger')
+            if request.is_json:
+                return jsonify({'status': 'error', 'message': msg}), 400
+            return redirect(url_for('apply_leave'))
+
+        if end_date < start_date:
+            msg = 'End date cannot be before start date.'
+            flash(msg, 'danger')
+            if request.is_json:
+                return jsonify({'status': 'error', 'message': msg}), 400
+            return redirect(url_for('apply_leave'))
+
+        total_days = float((end_date - start_date).days + 1)
+
+        with get_db() as conn:
+            # Check duplicate pending request
+            duplicate = conn.execute(
+                """
+                SELECT id FROM leave_requests
+                WHERE user_id = ? AND leave_type = ? AND start_date = ? AND end_date = ? AND status = 'Pending'
+                """,
+                (current_user.id, leave_type, start_date_str, end_date_str),
+            ).fetchone()
+            if duplicate:
+                msg = 'An identical pending leave request already exists.'
+                flash(msg, 'danger')
+                if request.is_json:
+                    return jsonify({'status': 'error', 'message': msg}), 400
+                return redirect(url_for('apply_leave'))
+
+            # Check overlapping pending or approved leave requests
+            overlap = conn.execute(
+                """
+                SELECT id, leave_type, start_date, end_date FROM leave_requests
+                WHERE user_id = ? AND status IN ('Pending', 'Approved')
+                  AND start_date <= ? AND end_date >= ?
+                """,
+                (current_user.id, end_date_str, start_date_str),
+            ).fetchone()
+            if overlap:
+                msg = 'Your requested leave dates overlap with an existing pending or approved leave request.'
+                flash(msg, 'danger')
+                if request.is_json:
+                    return jsonify({'status': 'error', 'message': msg}), 400
+                return redirect(url_for('apply_leave'))
+
+            employee_name = get_employee_name_for_user(conn, current_user.id, current_user.username)
+            applied_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            cursor = conn.execute(
+                """
+                INSERT INTO leave_requests (
+                    user_id, employee_name, leave_type, start_date, end_date,
+                    total_days, reason, status, applied_date
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', ?)
+                """,
+                (
+                    current_user.id,
+                    employee_name,
+                    leave_type,
+                    start_date_str,
+                    end_date_str,
+                    total_days,
+                    reason,
+                    applied_date,
+                ),
+            )
+            conn.commit()
+            leave_id = cursor.lastrowid
+
+        msg = 'Leave request submitted successfully.'
+        flash(msg, 'success')
+        if request.is_json:
+            return jsonify({'status': 'success', 'message': msg, 'leave_id': leave_id})
+        return redirect(url_for('my_leave_requests'))
+
+    valid_leave_types = ['Casual Leave', 'Sick Leave', 'Earned Leave', 'Unpaid Leave', 'Maternity Leave', 'Paternity Leave']
+    if request.is_json or request.headers.get('Accept') == 'application/json':
+        return jsonify({
+            'status': 'success',
+            'action': 'apply_leave',
+            'leave_types': valid_leave_types,
+            'message': 'Submit a POST request with leave_type, start_date, end_date, and reason to apply for leave.'
+        })
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Apply for Leave{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>Apply for Leave</h1>
+                <p>Submit a new leave application for review and authorization.</p>
+            </div>
+            <div class="d-flex gap-2">
+                <a class="btn btn-outline-secondary" href="{{ url_for('my_leave_requests') }}"><i class="bi bi-clock-history me-1"></i>My Requests</a>
+                {% if current_user.role == 'admin' %}
+                    <a class="btn btn-outline-secondary" href="{{ url_for('pending_leave_requests') }}"><i class="bi bi-hourglass-split me-1"></i>Pending Queue</a>
+                    <a class="btn btn-outline-secondary" href="{{ url_for('view_all_leave_requests') }}"><i class="bi bi-list-task me-1"></i>All Requests</a>
+                {% endif %}
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="card shadow-sm mx-auto" style="max-width: 680px;">
+            <div class="card-body">
+                <form method="post">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Leave Type</label>
+                        <select class="form-select" name="leave_type" required>
+                            <option value="">Select Leave Type</option>
+                            <option value="Casual Leave">Casual Leave</option>
+                            <option value="Sick Leave">Sick Leave</option>
+                            <option value="Earned Leave">Earned Leave</option>
+                            <option value="Unpaid Leave">Unpaid Leave</option>
+                            <option value="Maternity Leave">Maternity Leave</option>
+                            <option value="Paternity Leave">Paternity Leave</option>
+                        </select>
+                    </div>
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Start Date</label>
+                            <input class="form-control" type="date" name="start_date" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">End Date</label>
+                            <input class="form-control" type="date" name="end_date" required>
+                        </div>
+                    </div>
+                    <div class="mb-4">
+                        <label class="form-label fw-semibold">Reason for Leave</label>
+                        <textarea class="form-control" name="reason" rows="3" placeholder="Provide details regarding your leave request..." required></textarea>
+                    </div>
+                    <div class="d-flex justify-content-end gap-2">
+                        <a class="btn btn-outline-secondary" href="{{ url_for('my_leave_requests') }}">Cancel</a>
+                        <button class="btn btn-primary" type="submit"><i class="bi bi-send me-1"></i>Submit Application</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        {% endblock %}
+        """
+    )
+
+
+@app.route('/leave/my-requests', methods=['GET'])
+@login_required
+def my_leave_requests():
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, user_id, employee_name, leave_type, start_date, end_date,
+                   total_days, reason, status, applied_date, approved_by, approval_date,
+                   comments, rejection_reason
+            FROM leave_requests
+            WHERE user_id = ?
+            ORDER BY applied_date DESC, id DESC
+            """,
+            (current_user.id,),
+        ).fetchall()
+        requests_list = [dict(row) for row in rows]
+
+    if request.is_json or request.headers.get('Accept') == 'application/json':
+        return jsonify({'status': 'success', 'leave_requests': requests_list})
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}My Leave Requests{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>My Leave Requests</h1>
+                <p>Track the status of your submitted leave applications.</p>
+            </div>
+            <div class="d-flex gap-2">
+                <a class="btn btn-primary" href="{{ url_for('apply_leave') }}"><i class="bi bi-plus-lg me-1"></i>Apply Leave</a>
+                {% if current_user.role == 'admin' %}
+                    <a class="btn btn-outline-secondary" href="{{ url_for('pending_leave_requests') }}"><i class="bi bi-hourglass-split me-1"></i>Pending Queue</a>
+                    <a class="btn btn-outline-secondary" href="{{ url_for('view_all_leave_requests') }}"><i class="bi bi-list-task me-1"></i>All Leave History</a>
+                {% endif %}
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="card shadow-sm">
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Leave Type</th>
+                                <th>Duration</th>
+                                <th>Days</th>
+                                <th>Reason</th>
+                                <th>Status</th>
+                                <th>Applied On</th>
+                                <th>Remarks / Reason</th>
+                                <th class="text-end">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for req in requests %}
+                                <tr>
+                                    <td class="fw-semibold">{{ req.leave_type }}</td>
+                                    <td><i class="bi bi-calendar-event me-1 text-muted"></i>{{ req.start_date }} <span class="text-muted">to</span> {{ req.end_date }}</td>
+                                    <td><span class="badge bg-light text-dark border">{{ req.total_days }} day{% if req.total_days != 1 %}s{% endif %}</span></td>
+                                    <td style="max-width: 220px;" class="text-truncate" title="{{ req.reason }}">{{ req.reason }}</td>
+                                    <td>
+                                        <span class="badge bg-{% if req.status == 'Approved' %}success{% elif req.status == 'Rejected' %}danger{% elif req.status == 'Cancelled' %}secondary{% else %}warning text-dark{% endif %}">
+                                            {{ req.status }}
+                                        </span>
+                                    </td>
+                                    <td class="text-muted small">{{ req.applied_date }}</td>
+                                    <td class="small">
+                                        {% if req.status == 'Rejected' and req.rejection_reason %}
+                                            <span class="text-danger"><i class="bi bi-exclamation-circle me-1"></i>{{ req.rejection_reason }}</span>
+                                        {% elif req.comments %}
+                                            <span class="text-muted"><i class="bi bi-chat-left-text me-1"></i>{{ req.comments }}</span>
+                                        {% else %}
+                                            <span class="text-muted">-</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="text-end">
+                                        {% if req.status == 'Pending' %}
+                                            <form method="post" action="{{ url_for('cancel_leave', leave_id=req.id) }}" style="display:inline;">
+                                                <button class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to cancel this pending leave request?')">
+                                                    <i class="bi bi-x-circle me-1"></i>Cancel
+                                                </button>
+                                            </form>
+                                        {% else %}
+                                            <span class="text-muted small">-</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% else %}
+                                <tr>
+                                    <td colspan="8" class="text-center py-4 text-muted">
+                                        <i class="bi bi-calendar-x display-6 d-block mb-2"></i>
+                                        No leave requests found. <a href="{{ url_for('apply_leave') }}">Apply for leave</a>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endblock %}
+        """,
+        requests=requests_list,
+    )
+
+
+@app.route('/leave/cancel/<int:leave_id>', methods=['POST'])
+@login_required
+def cancel_leave(leave_id):
+    with get_db() as conn:
+        req = conn.execute(
+            "SELECT * FROM leave_requests WHERE id = ? AND user_id = ?",
+            (leave_id, current_user.id),
+        ).fetchone()
+
+        if req is None:
+            msg = 'Leave request not found or access denied.'
+            flash(msg, 'danger')
+            if request.is_json:
+                return jsonify({'status': 'error', 'message': msg}), 404
+            return redirect(url_for('my_leave_requests'))
+
+        if req['status'] != 'Pending':
+            msg = 'Only pending leave requests can be cancelled.'
+            flash(msg, 'warning')
+            if request.is_json:
+                return jsonify({'status': 'error', 'message': msg}), 400
+            return redirect(url_for('my_leave_requests'))
+
+        conn.execute(
+            "UPDATE leave_requests SET status = 'Cancelled' WHERE id = ?",
+            (leave_id,),
+        )
+        conn.commit()
+
+    msg = 'Leave request cancelled successfully.'
+    flash(msg, 'success')
+    if request.is_json:
+        return jsonify({'status': 'success', 'message': msg})
+    return redirect(url_for('my_leave_requests'))
+
+
+@app.route('/admin/leave/all', methods=['GET'])
+@login_required
+def view_all_leave_requests():
+    if current_user.role != 'admin':
+        flash('Admin access required.', 'danger')
+        if request.is_json or request.headers.get('Accept') == 'application/json':
+            return jsonify({'status': 'error', 'message': 'Admin access required.'}), 403
+        return redirect(url_for('dashboard'))
+
+    status_filter = (request.args.get('status') or 'All').strip()
+    query = """
+        SELECT id, user_id, employee_name, leave_type, start_date, end_date,
+               total_days, reason, status, applied_date, approved_by, approval_date,
+               comments, rejection_reason
+        FROM leave_requests
+        WHERE 1 = 1
+    """
+    params = []
+    if status_filter != 'All':
+        query += " AND status = ?"
+        params.append(status_filter)
+
+    query += " ORDER BY applied_date DESC, id DESC"
+
+    with get_db() as conn:
+        rows = conn.execute(query, params).fetchall()
+        requests_list = [dict(row) for row in rows]
+
+    if request.is_json or request.headers.get('Accept') == 'application/json':
+        return jsonify({'status': 'success', 'status_filter': status_filter, 'leave_requests': requests_list})
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}All Leave Requests{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>All Leave Requests</h1>
+                <p>Master audit log of all leave applications across the company.</p>
+            </div>
+            <div class="d-flex gap-2">
+                <a class="btn btn-outline-secondary" href="{{ url_for('pending_leave_requests') }}"><i class="bi bi-hourglass-split me-1"></i>Pending Queue</a>
+                <a class="btn btn-primary" href="{{ url_for('apply_leave') }}"><i class="bi bi-plus-lg me-1"></i>Apply Leave</a>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="card shadow-sm mb-4">
+            <div class="card-body py-3">
+                <form method="get" class="row g-3 align-items-center">
+                    <div class="col-auto">
+                        <label class="col-form-label fw-semibold">Status Filter:</label>
+                    </div>
+                    <div class="col-auto">
+                        <select class="form-select" name="status" onchange="this.form.submit()">
+                            <option value="All" {% if status_filter == 'All' %}selected{% endif %}>All Statuses</option>
+                            <option value="Pending" {% if status_filter == 'Pending' %}selected{% endif %}>Pending</option>
+                            <option value="Approved" {% if status_filter == 'Approved' %}selected{% endif %}>Approved</option>
+                            <option value="Rejected" {% if status_filter == 'Rejected' %}selected{% endif %}>Rejected</option>
+                            <option value="Cancelled" {% if status_filter == 'Cancelled' %}selected{% endif %}>Cancelled</option>
+                        </select>
+                    </div>
+                    {% if status_filter != 'All' %}
+                        <div class="col-auto">
+                            <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('view_all_leave_requests') }}">Reset Filter</a>
+                        </div>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Employee</th>
+                                <th>Leave Type</th>
+                                <th>Dates</th>
+                                <th>Days</th>
+                                <th>Reason</th>
+                                <th>Status</th>
+                                <th>Applied On</th>
+                                <th>Processed By</th>
+                                <th>Remarks / Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for req in requests %}
+                                <tr>
+                                    <td class="fw-bold">{{ req.employee_name }}</td>
+                                    <td>{{ req.leave_type }}</td>
+                                    <td>{{ req.start_date }} <span class="text-muted">to</span> {{ req.end_date }}</td>
+                                    <td><span class="badge bg-light text-dark border">{{ req.total_days }} day{% if req.total_days != 1 %}s{% endif %}</span></td>
+                                    <td style="max-width: 200px;" class="text-truncate" title="{{ req.reason }}">{{ req.reason }}</td>
+                                    <td>
+                                        <span class="badge bg-{% if req.status == 'Approved' %}success{% elif req.status == 'Rejected' %}danger{% elif req.status == 'Cancelled' %}secondary{% else %}warning text-dark{% endif %}">
+                                            {{ req.status }}
+                                        </span>
+                                    </td>
+                                    <td class="text-muted small">{{ req.applied_date }}</td>
+                                    <td class="small">
+                                        {% if req.approved_by %}
+                                            <span class="fw-semibold">{{ req.approved_by }}</span>
+                                            {% if req.approval_date %}<br><small class="text-muted">{{ req.approval_date }}</small>{% endif %}
+                                        {% else %}
+                                            <span class="text-muted">-</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="small">
+                                        {% if req.status == 'Rejected' and req.rejection_reason %}
+                                            <span class="text-danger"><i class="bi bi-exclamation-circle me-1"></i>{{ req.rejection_reason }}</span>
+                                        {% elif req.comments %}
+                                            <span class="text-muted"><i class="bi bi-chat-left-text me-1"></i>{{ req.comments }}</span>
+                                        {% else %}
+                                            <span class="text-muted">-</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% else %}
+                                <tr>
+                                    <td colspan="9" class="text-center py-4 text-muted">
+                                        <i class="bi bi-inbox display-6 d-block mb-2"></i>
+                                        No leave requests found matching criteria.
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endblock %}
+        """,
+        requests=requests_list,
+        status_filter=status_filter,
+    )
+
+
+@app.route('/admin/leave/pending', methods=['GET'])
+@login_required
+def pending_leave_requests():
+    if current_user.role != 'admin':
+        flash('Admin access required.', 'danger')
+        if request.is_json or request.headers.get('Accept') == 'application/json':
+            return jsonify({'status': 'error', 'message': 'Admin access required.'}), 403
+        return redirect(url_for('dashboard'))
+
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, user_id, employee_name, leave_type, start_date, end_date,
+                   total_days, reason, status, applied_date, approved_by, approval_date,
+                   comments, rejection_reason
+            FROM leave_requests
+            WHERE status = 'Pending'
+            ORDER BY applied_date ASC, id ASC
+            """
+        ).fetchall()
+        requests_list = [dict(row) for row in rows]
+
+    if request.is_json or request.headers.get('Accept') == 'application/json':
+        return jsonify({'status': 'success', 'pending_requests': requests_list})
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Pending Leave Requests{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>Pending Leave Requests</h1>
+                <p>Review and process employee leave applications queued for authorization.</p>
+            </div>
+            <div class="d-flex gap-2">
+                <a class="btn btn-outline-secondary active" href="{{ url_for('pending_leave_requests') }}"><i class="bi bi-hourglass-split me-1"></i>Pending Queue</a>
+                <a class="btn btn-outline-secondary" href="{{ url_for('view_all_leave_requests') }}"><i class="bi bi-list-task me-1"></i>All Leave History</a>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="card shadow-sm">
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Employee</th>
+                                <th>Type</th>
+                                <th>Dates</th>
+                                <th>Days</th>
+                                <th>Reason</th>
+                                <th>Applied On</th>
+                                <th class="text-end">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for req in requests %}
+                                <tr>
+                                    <td class="fw-bold"><i class="bi bi-person me-1 text-primary"></i>{{ req.employee_name }}</td>
+                                    <td><span class="badge bg-light text-dark border">{{ req.leave_type }}</span></td>
+                                    <td>{{ req.start_date }} <span class="text-muted">to</span> {{ req.end_date }}</td>
+                                    <td><span class="badge bg-info text-dark">{{ req.total_days }} day{% if req.total_days != 1 %}s{% endif %}</span></td>
+                                    <td style="max-width: 250px;">{{ req.reason }}</td>
+                                    <td class="text-muted small">{{ req.applied_date }}</td>
+                                    <td class="text-end">
+                                        <div class="d-inline-flex gap-2">
+                                            <button type="button" class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#approveModal{{ req.id }}">
+                                                <i class="bi bi-check-circle me-1"></i>Approve
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal" data-bs-target="#rejectModal{{ req.id }}">
+                                                <i class="bi bi-x-circle me-1"></i>Reject
+                                            </button>
+                                        </div>
+
+                                        <!-- Approve Modal -->
+                                        <div class="modal fade text-start" id="approveModal{{ req.id }}" tabindex="-1" aria-hidden="true">
+                                            <div class="modal-dialog">
+                                                <div class="modal-content">
+                                                    <form method="post" action="{{ url_for('approve_leave', leave_id=req.id) }}">
+                                                        <div class="modal-header">
+                                                            <h5 class="modal-title">Approve Leave Request</h5>
+                                                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                                        </div>
+                                                        <div class="modal-body">
+                                                            <p>Approve leave for <strong>{{ req.employee_name }}</strong> ({{ req.start_date }} to {{ req.end_date }})?</p>
+                                                            <div class="mb-3">
+                                                                <label class="form-label">Approval Comments (Optional)</label>
+                                                                <textarea class="form-control" name="comments" rows="2" placeholder="Optional comments for employee..."></textarea>
+                                                            </div>
+                                                        </div>
+                                                        <div class="modal-footer">
+                                                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                                                            <button type="submit" class="btn btn-success">Confirm Approval</button>
+                                                        </div>
+                                                    </form>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Reject Modal -->
+                                        <div class="modal fade text-start" id="rejectModal{{ req.id }}" tabindex="-1" aria-hidden="true">
+                                            <div class="modal-dialog">
+                                                <div class="modal-content">
+                                                    <form method="post" action="{{ url_for('reject_leave', leave_id=req.id) }}">
+                                                        <div class="modal-header">
+                                                            <h5 class="modal-title text-danger">Reject Leave Request</h5>
+                                                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                                        </div>
+                                                        <div class="modal-body">
+                                                            <p>Reject leave request for <strong>{{ req.employee_name }}</strong>?</p>
+                                                            <div class="mb-3">
+                                                                <label class="form-label">Rejection Reason <span class="text-danger">*</span></label>
+                                                                <textarea class="form-control" name="rejection_reason" rows="2" placeholder="Specify reason for rejection..." required></textarea>
+                                                            </div>
+                                                            <div class="mb-3">
+                                                                <label class="form-label">Additional Comments (Optional)</label>
+                                                                <textarea class="form-control" name="comments" rows="2" placeholder="Optional comments..."></textarea>
+                                                            </div>
+                                                        </div>
+                                                        <div class="modal-footer">
+                                                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                                                            <button type="submit" class="btn btn-danger">Confirm Rejection</button>
+                                                        </div>
+                                                    </form>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            {% else %}
+                                <tr>
+                                    <td colspan="7" class="text-center py-4 text-muted">
+                                        <i class="bi bi-check-all display-6 d-block mb-2 text-success"></i>
+                                        No pending leave requests to process.
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+        {% endblock %}
+        """
+    )
+
+
+@app.route('/admin/leave/<int:leave_id>/approve', methods=['POST'])
+@login_required
+def approve_leave(leave_id):
+    if current_user.role != 'admin':
+        flash('Admin access required.', 'danger')
+        if request.is_json:
+            return jsonify({'status': 'error', 'message': 'Admin access required.'}), 403
+        return redirect(url_for('dashboard'))
+
+    if request.is_json and request.json:
+        comments = str(request.json.get('comments', '')).strip()
+    else:
+        comments = (request.form.get('comments') or '').strip()
+
+    with get_db() as conn:
+        req = conn.execute(
+            "SELECT * FROM leave_requests WHERE id = ?",
+            (leave_id,),
+        ).fetchone()
+
+        if req is None:
+            msg = 'Leave request not found.'
+            flash(msg, 'danger')
+            if request.is_json:
+                return jsonify({'status': 'error', 'message': msg}), 404
+            return redirect(url_for('pending_leave_requests'))
+
+        if req['status'] != 'Pending':
+            msg = f"Cannot approve leave request with status '{req['status']}'."
+            flash(msg, 'warning')
+            if request.is_json:
+                return jsonify({'status': 'error', 'message': msg}), 400
+            return redirect(url_for('pending_leave_requests'))
+
+        approval_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        conn.execute(
+            """
+            UPDATE leave_requests
+            SET status = 'Approved',
+                approved_by = ?,
+                approval_date = ?,
+                comments = ?
+            WHERE id = ?
+            """,
+            (current_user.username, approval_date, comments, leave_id),
+        )
+        conn.commit()
+
+    msg = 'Leave request approved successfully.'
+    flash(msg, 'success')
+    if request.is_json:
+        return jsonify({'status': 'success', 'message': msg, 'leave_id': leave_id})
+    return redirect(url_for('pending_leave_requests'))
+
+
+@app.route('/admin/leave/<int:leave_id>/reject', methods=['POST'])
+@login_required
+def reject_leave(leave_id):
+    if current_user.role != 'admin':
+        flash('Admin access required.', 'danger')
+        if request.is_json:
+            return jsonify({'status': 'error', 'message': 'Admin access required.'}), 403
+        return redirect(url_for('dashboard'))
+
+    if request.is_json and request.json:
+        data = request.json
+        rejection_reason = str(data.get('rejection_reason', '')).strip()
+        comments = str(data.get('comments', '')).strip()
+    else:
+        rejection_reason = (request.form.get('rejection_reason') or '').strip()
+        comments = (request.form.get('comments') or '').strip()
+
+    if not rejection_reason:
+        msg = 'Rejection reason is required.'
+        flash(msg, 'danger')
+        if request.is_json:
+            return jsonify({'status': 'error', 'message': msg}), 400
+        return redirect(url_for('pending_leave_requests'))
+
+    with get_db() as conn:
+        req = conn.execute(
+            "SELECT * FROM leave_requests WHERE id = ?",
+            (leave_id,),
+        ).fetchone()
+
+        if req is None:
+            msg = 'Leave request not found.'
+            flash(msg, 'danger')
+            if request.is_json:
+                return jsonify({'status': 'error', 'message': msg}), 404
+            return redirect(url_for('pending_leave_requests'))
+
+        if req['status'] != 'Pending':
+            msg = f"Cannot reject leave request with status '{req['status']}'."
+            flash(msg, 'warning')
+            if request.is_json:
+                return jsonify({'status': 'error', 'message': msg}), 400
+            return redirect(url_for('pending_leave_requests'))
+
+        approval_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        conn.execute(
+            """
+            UPDATE leave_requests
+            SET status = 'Rejected',
+                approved_by = ?,
+                approval_date = ?,
+                rejection_reason = ?,
+                comments = ?
+            WHERE id = ?
+            """,
+            (current_user.username, approval_date, rejection_reason, comments, leave_id),
+        )
+        conn.commit()
+
+    msg = 'Leave request rejected successfully.'
+    flash(msg, 'success')
+    if request.is_json:
+        return jsonify({'status': 'success', 'message': msg, 'leave_id': leave_id})
+    return redirect(url_for('pending_leave_requests'))
 
 
 if __name__ == "__main__":
