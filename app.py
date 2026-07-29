@@ -463,6 +463,33 @@ def ensure_leave_requests_table():
         conn.commit()
 
 
+def ensure_performance_reviews_table():
+    """Create performance_reviews table if it does not exist."""
+    with get_db() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS performance_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                employee_user_id INTEGER NOT NULL,
+                employee_name TEXT NOT NULL,
+                reviewer_username TEXT NOT NULL,
+                review_period TEXT NOT NULL,
+                overall_rating REAL NOT NULL,
+                technical_skills_score REAL DEFAULT 0,
+                communication_score REAL DEFAULT 0,
+                productivity_score REAL DEFAULT 0,
+                teamwork_score REAL DEFAULT 0,
+                strengths TEXT,
+                areas_for_improvement TEXT,
+                comments TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (employee_user_id) REFERENCES users (id)
+            )
+            """
+        )
+        conn.commit()
+
+
 def init_db():
     with get_db() as conn:
         conn.execute(
@@ -485,6 +512,7 @@ def init_db():
         ensure_tasks_table()
         ensure_time_logs_table()
         ensure_leave_requests_table()
+        ensure_performance_reviews_table()
 
         admin_exists = conn.execute(
             "SELECT COUNT(*) FROM users WHERE username = ?",
@@ -3849,6 +3877,681 @@ def reject_leave(leave_id):
     if request.is_json:
         return jsonify({'status': 'success', 'message': msg, 'leave_id': leave_id})
     return redirect(url_for('pending_leave_requests'))
+
+
+# Performance Management Module Routes
+
+@app.route('/performance')
+@login_required
+def performance_dashboard():
+    with get_db() as conn:
+        if current_user.role == 'admin':
+            total_reviews = conn.execute("SELECT COUNT(*) FROM performance_reviews").fetchone()[0]
+            avg_company_rating = conn.execute("SELECT AVG(overall_rating) FROM performance_reviews").fetchone()[0] or 0.0
+
+            users_rows = conn.execute(
+                """
+                SELECT u.id, u.username, u.role, u.full_name, u.email,
+                       COUNT(r.id) AS review_count,
+                       AVG(r.overall_rating) AS avg_rating,
+                       MAX(r.created_at) AS latest_review_date
+                FROM users u
+                LEFT JOIN performance_reviews r ON r.employee_user_id = u.id
+                GROUP BY u.id
+                ORDER BY CASE WHEN AVG(r.overall_rating) IS NULL THEN 1 ELSE 0 END, AVG(r.overall_rating) DESC, u.username ASC
+                """
+            ).fetchall()
+            employees_perf = [dict(row) for row in users_rows]
+
+            # Rating distribution metrics for visual chart
+            dist_high = sum(1 for e in employees_perf if e['avg_rating'] and e['avg_rating'] >= 4.5)
+            dist_good = sum(1 for e in employees_perf if e['avg_rating'] and 3.5 <= e['avg_rating'] < 4.5)
+            dist_needs_work = sum(1 for e in employees_perf if e['avg_rating'] and e['avg_rating'] < 3.5)
+            dist_unrated = sum(1 for e in employees_perf if not e['avg_rating'])
+
+            return render_template_string(
+                """
+                {% extends "base.html" %}
+                {% block title %}Performance Dashboard{% endblock %}
+                {% block page_content %}
+                <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+                    <div>
+                        <h1>Performance Dashboard</h1>
+                        <p>Company-wide performance management, skill analytics, and evaluations.</p>
+                    </div>
+                </div>
+
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        {% for category, message in messages %}
+                            <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                                {{ message }}
+                                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+
+                <div class="row g-3 mb-4">
+                    <div class="col-md-6 col-lg-3">
+                        <div class="card shadow-sm h-100 border-0 border-start border-primary border-4">
+                            <div class="card-body d-flex align-items-center">
+                                <div class="rounded-circle bg-primary bg-opacity-10 p-3 me-3 text-primary">
+                                    <i class="bi bi-graph-up-arrow fs-3"></i>
+                                </div>
+                                <div>
+                                    <div class="text-muted small fw-semibold">Company Avg Rating</div>
+                                    <div class="fs-4 fw-bold text-dark">{{ '%.2f'|format(avg_company_rating) }} <span class="fs-6 text-warning">★</span></div>
+                                    <div class="progress mt-1" style="height: 4px; width: 100px;">
+                                        <div class="progress-bar bg-primary" style="width: {{ (avg_company_rating / 5.0) * 100 }}%;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6 col-lg-3">
+                        <div class="card shadow-sm h-100 border-0 border-start border-success border-4">
+                            <div class="card-body d-flex align-items-center">
+                                <div class="rounded-circle bg-success bg-opacity-10 p-3 me-3 text-success">
+                                    <i class="bi bi-journal-check fs-3"></i>
+                                </div>
+                                <div>
+                                    <div class="text-muted small fw-semibold">Total Reviews Logged</div>
+                                    <div class="fs-4 fw-bold text-dark">{{ total_reviews }}</div>
+                                    <span class="text-muted small">Reviews recorded</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6 col-lg-3">
+                        <div class="card shadow-sm h-100 border-0 border-start border-info border-4">
+                            <div class="card-body d-flex align-items-center">
+                                <div class="rounded-circle bg-info bg-opacity-10 p-3 me-3 text-info">
+                                    <i class="bi bi-people fs-3"></i>
+                                </div>
+                                <div>
+                                    <div class="text-muted small fw-semibold">Evaluated Employees</div>
+                                    <div class="fs-4 fw-bold text-dark">{{ employees|selectattr('avg_rating')|list|length }} / {{ employees|length }}</div>
+                                    <span class="text-muted small">Active team members</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6 col-lg-3">
+                        <div class="card shadow-sm h-100 border-0 border-start border-warning border-4">
+                            <div class="card-body d-flex align-items-center">
+                                <div class="rounded-circle bg-warning bg-opacity-10 p-3 me-3 text-warning">
+                                    <i class="bi bi-trophy fs-3"></i>
+                                </div>
+                                <div>
+                                    <div class="text-muted small fw-semibold">Top Performers (4.5+)</div>
+                                    <div class="fs-4 fw-bold text-dark">{{ dist_high }}</div>
+                                    <span class="text-muted small">High rating tier</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row g-4 mb-4">
+                    <div class="col-lg-8">
+                        <div class="card shadow-sm h-100">
+                            <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-bar-chart-line-fill me-2 text-primary"></i>Performance Tier Distribution</h5>
+                            </div>
+                            <div class="card-body">
+                                <div style="height: 220px; position: relative;">
+                                    <canvas id="performanceDistChart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-lg-4">
+                        <div class="card shadow-sm h-100">
+                            <div class="card-header bg-white py-3 border-0">
+                                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-pie-chart-fill me-2 text-primary"></i>Evaluation Coverage</h5>
+                            </div>
+                            <div class="card-body text-center d-flex flex-column justify-content-center">
+                                <div style="height: 180px; position: relative;" class="mx-auto">
+                                    <canvas id="coverageDoughnutChart"></canvas>
+                                </div>
+                                <div class="mt-2 text-muted small">
+                                    <span class="badge bg-success me-1">Evaluated</span>
+                                    <span class="badge bg-secondary">Pending Initial Review</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card shadow-sm">
+                    <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-award me-2 text-primary"></i>Employee Performance Directory</h5>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Employee</th>
+                                        <th>Role</th>
+                                        <th>Reviews Count</th>
+                                        <th>Overall Rating</th>
+                                        <th>Last Reviewed</th>
+                                        <th class="text-end">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for emp in employees %}
+                                        <tr>
+                                            <td class="fw-bold">
+                                                <i class="bi bi-person-circle me-2 text-primary"></i>
+                                                {{ emp.full_name or emp.username }}
+                                                {% if emp.full_name %}<br><small class="text-muted ms-4">@{{ emp.username }}</small>{% endif %}
+                                            </td>
+                                            <td><span class="badge bg-light text-dark border">{{ emp.role }}</span></td>
+                                            <td><span class="badge bg-light text-dark border">{{ emp.review_count }} review{% if emp.review_count != 1 %}s{% endif %}</span></td>
+                                            <td>
+                                                {% if emp.avg_rating %}
+                                                    <span class="badge bg-{% if emp.avg_rating >= 4.5 %}success{% elif emp.avg_rating >= 3.5 %}primary{% else %}warning text-dark{% endif %} fs-6">
+                                                        {{ '%.1f'|format(emp.avg_rating) }} ★
+                                                    </span>
+                                                {% else %}
+                                                    <span class="text-muted small">Not Evaluated</span>
+                                                {% endif %}
+                                            </td>
+                                            <td class="text-muted small">{{ emp.latest_review_date or '-' }}</td>
+                                            <td class="text-end">
+                                                <div class="d-inline-flex gap-2">
+                                                    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('employee_performance_profile', user_id=emp.id) }}">
+                                                        <i class="bi bi-eye me-1"></i>Profile
+                                                    </a>
+                                                    <a class="btn btn-sm btn-primary" href="{{ url_for('add_performance_review', user_id=emp.id) }}">
+                                                        <i class="bi bi-plus-lg me-1"></i>Review
+                                                    </a>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    {% else %}
+                                        <tr>
+                                            <td colspan="6" class="text-center py-4 text-muted">No employees found.</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+                <script>
+                    document.addEventListener('DOMContentLoaded', function() {
+                        // Bar Chart for Rating Tier Distribution
+                        const ctxDist = document.getElementById('performanceDistChart').getContext('2d');
+                        new Chart(ctxDist, {
+                            type: 'bar',
+                            data: {
+                                labels: ['High (4.5 - 5.0)', 'Good (3.5 - 4.4)', 'Needs Work (<3.5)', 'Unrated'],
+                                datasets: [{
+                                    label: 'Number of Employees',
+                                    data: [{{ dist_high }}, {{ dist_good }}, {{ dist_needs_work }}, {{ dist_unrated }}],
+                                    backgroundColor: ['#22c55e', '#4f46e5', '#f59e0b', '#cbd5e1'],
+                                    borderRadius: 6
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: { legend: { display: false } },
+                                scales: {
+                                    y: { beginAtZero: true, ticks: { stepSize: 1 } }
+                                }
+                            }
+                        });
+
+                        // Doughnut Chart for Coverage
+                        const ctxCov = document.getElementById('coverageDoughnutChart').getContext('2d');
+                        new Chart(ctxCov, {
+                            type: 'doughnut',
+                            data: {
+                                labels: ['Evaluated', 'Pending Review'],
+                                datasets: [{
+                                    data: [{{ employees|selectattr('avg_rating')|list|length }}, {{ dist_unrated }}],
+                                    backgroundColor: ['#22c55e', '#94a3b8'],
+                                    borderWidth: 0
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: { legend: { display: false } }
+                            }
+                        });
+                    });
+                </script>
+                {% endblock %}
+                """,
+                employees=employees_perf,
+                avg_company_rating=avg_company_rating,
+                total_reviews=total_reviews,
+                dist_high=dist_high,
+                dist_good=dist_good,
+                dist_needs_work=dist_needs_work,
+                dist_unrated=dist_unrated,
+            )
+        else:
+            return redirect(url_for('employee_performance_profile', user_id=current_user.id))
+
+
+@app.route('/performance/profile/<int:user_id>')
+@login_required
+def employee_performance_profile(user_id):
+    if current_user.role != 'admin' and current_user.id != user_id:
+        flash('Access denied.', 'danger')
+        return redirect(url_for('performance_dashboard'))
+
+    with get_db() as conn:
+        emp_user = conn.execute(
+            "SELECT id, username, role, full_name, email FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+
+        if emp_user is None:
+            flash('Employee user not found.', 'danger')
+            return redirect(url_for('performance_dashboard'))
+
+        reviews_rows = conn.execute(
+            """
+            SELECT id, employee_user_id, employee_name, reviewer_username, review_period,
+                   overall_rating, technical_skills_score, communication_score,
+                   productivity_score, teamwork_score, strengths, areas_for_improvement,
+                   comments, created_at
+            FROM performance_reviews
+            WHERE employee_user_id = ?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (user_id,),
+        ).fetchall()
+        reviews = [dict(row) for row in reviews_rows]
+
+        if reviews:
+            avg_overall = sum(r['overall_rating'] for r in reviews) / len(reviews)
+            avg_tech = sum(r['technical_skills_score'] for r in reviews) / len(reviews)
+            avg_comm = sum(r['communication_score'] for r in reviews) / len(reviews)
+            avg_prod = sum(r['productivity_score'] for r in reviews) / len(reviews)
+            avg_team = sum(r['teamwork_score'] for r in reviews) / len(reviews)
+        else:
+            avg_overall = avg_tech = avg_comm = avg_prod = avg_team = 0.0
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Performance Profile - {{ emp.full_name or emp.username }}{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>Performance Profile</h1>
+                <p>Employee skill evaluations and review history for <strong>{{ emp.full_name or emp.username }}</strong>.</p>
+            </div>
+            <div class="d-flex gap-2">
+                <a class="btn btn-outline-secondary" href="{{ url_for('performance_dashboard') }}"><i class="bi bi-arrow-left me-1"></i>Back to Dashboard</a>
+                {% if current_user.role == 'admin' %}
+                    <a class="btn btn-primary" href="{{ url_for('add_performance_review', user_id=emp.id) }}"><i class="bi bi-plus-lg me-1"></i>Add Review</a>
+                {% endif %}
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="row g-4 mb-4">
+            <div class="col-md-4">
+                <div class="card shadow-sm text-center py-4 h-100">
+                    <div class="card-body d-flex flex-column justify-content-center">
+                        <div class="user-avatar mx-auto mb-3 fs-3" style="width:72px; height:72px; background: #e0e7ff; color: #4338ca;">
+                            {{ (emp.full_name or emp.username)[:2]|upper }}
+                        </div>
+                        <h4 class="h5 mb-1 fw-bold">{{ emp.full_name or emp.username }}</h4>
+                        <p class="text-muted small mb-3">@{{ emp.username }} • <span class="badge bg-light text-dark border">{{ emp.role }}</span></p>
+                        
+                        <div class="border-top pt-3">
+                            <div class="text-muted small fw-semibold">Overall Score Average</div>
+                            <div class="display-6 fw-bold text-primary my-1">{{ '%.1f'|format(avg_overall) }} <span class="fs-4 text-warning">★</span></div>
+                            <div class="text-muted small">Based on {{ reviews|length }} review{% if reviews|length != 1 %}s{% endif %}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-8">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white py-3 border-0">
+                        <h5 class="card-title fw-bold mb-0"><i class="bi bi-radar me-2 text-primary"></i>Skill Competency Matrix</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row align-items-center">
+                            <div class="col-md-6 mb-3 mb-md-0" style="height: 220px; position: relative;">
+                                <canvas id="skillRadarChart"></canvas>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <div class="d-flex justify-content-between mb-1">
+                                        <span class="fw-semibold small"><i class="bi bi-code-slash text-primary me-1"></i>Technical Skills</span>
+                                        <span class="fw-bold small">{{ '%.1f'|format(avg_tech) }} / 5.0</span>
+                                    </div>
+                                    <div class="progress" style="height: 8px;">
+                                        <div class="progress-bar bg-primary" role="progressbar" style="width: {{ (avg_tech / 5.0) * 100 }}%;"></div>
+                                    </div>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <div class="d-flex justify-content-between mb-1">
+                                        <span class="fw-semibold small"><i class="bi bi-chat-dots text-info me-1"></i>Communication</span>
+                                        <span class="fw-bold small">{{ '%.1f'|format(avg_comm) }} / 5.0</span>
+                                    </div>
+                                    <div class="progress" style="height: 8px;">
+                                        <div class="progress-bar bg-info" role="progressbar" style="width: {{ (avg_comm / 5.0) * 100 }}%;"></div>
+                                    </div>
+                                </div>
+
+                                <div class="mb-3">
+                                    <div class="d-flex justify-content-between mb-1">
+                                        <span class="fw-semibold small"><i class="bi bi-lightning-charge text-success me-1"></i>Productivity</span>
+                                        <span class="fw-bold small">{{ '%.1f'|format(avg_prod) }} / 5.0</span>
+                                    </div>
+                                    <div class="progress" style="height: 8px;">
+                                        <div class="progress-bar bg-success" role="progressbar" style="width: {{ (avg_prod / 5.0) * 100 }}%;"></div>
+                                    </div>
+                                </div>
+
+                                <div class="mb-0">
+                                    <div class="d-flex justify-content-between mb-1">
+                                        <span class="fw-semibold small"><i class="bi bi-people-fill text-warning me-1"></i>Teamwork</span>
+                                        <span class="fw-bold small">{{ '%.1f'|format(avg_team) }} / 5.0</span>
+                                    </div>
+                                    <div class="progress" style="height: 8px;">
+                                        <div class="progress-bar bg-warning" role="progressbar" style="width: {{ (avg_team / 5.0) * 100 }}%;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-white py-3 border-0">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-clock-history me-2 text-primary"></i>Manager Evaluation History</h5>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Review Period</th>
+                                <th>Overall Rating</th>
+                                <th>Category Scores</th>
+                                <th>Strengths & Improvement Areas</th>
+                                <th>Evaluated By</th>
+                                <th>Date</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for rev in reviews %}
+                                <tr>
+                                    <td class="fw-bold text-dark">{{ rev.review_period }}</td>
+                                    <td><span class="badge bg-success fs-6">{{ '%.1f'|format(rev.overall_rating) }} ★</span></td>
+                                    <td class="small">
+                                        <span class="d-block text-muted">Tech: <strong class="text-dark">{{ rev.technical_skills_score }}</strong></span>
+                                        <span class="d-block text-muted">Comm: <strong class="text-dark">{{ rev.communication_score }}</strong></span>
+                                        <span class="d-block text-muted">Prod: <strong class="text-dark">{{ rev.productivity_score }}</strong></span>
+                                        <span class="d-block text-muted">Team: <strong class="text-dark">{{ rev.teamwork_score }}</strong></span>
+                                    </td>
+                                    <td style="max-width: 320px;">
+                                        {% if rev.strengths %}
+                                            <div class="small text-success mb-1"><strong><i class="bi bi-hand-thumbs-up me-1"></i>Strengths:</strong> {{ rev.strengths }}</div>
+                                        {% endif %}
+                                        {% if rev.areas_for_improvement %}
+                                            <div class="small text-danger mb-1"><strong><i class="bi bi-arrow-up-circle me-1"></i>Needs Work:</strong> {{ rev.areas_for_improvement }}</div>
+                                        {% endif %}
+                                        {% if rev.comments %}
+                                            <div class="small text-muted"><strong>Comments:</strong> {{ rev.comments }}</div>
+                                        {% endif %}
+                                    </td>
+                                    <td class="small fw-semibold"><i class="bi bi-person-check me-1 text-primary"></i>{{ rev.reviewer_username }}</td>
+                                    <td class="small text-muted">{{ rev.created_at }}</td>
+                                </tr>
+                            {% else %}
+                                <tr>
+                                    <td colspan="6" class="text-center py-4 text-muted">
+                                        <i class="bi bi-journal-x display-6 d-block mb-2"></i>
+                                        No performance reviews logged for this employee yet.
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const ctxRadar = document.getElementById('skillRadarChart').getContext('2d');
+                new Chart(ctxRadar, {
+                    type: 'radar',
+                    data: {
+                        labels: ['Technical', 'Communication', 'Productivity', 'Teamwork'],
+                        datasets: [{
+                            label: 'Average Score',
+                            data: [{{ avg_tech }}, {{ avg_comm }}, {{ avg_prod }}, {{ avg_team }}],
+                            backgroundColor: 'rgba(79, 70, 229, 0.2)',
+                            borderColor: '#4f46e5',
+                            pointBackgroundColor: '#4f46e5',
+                            pointBorderColor: '#fff',
+                            pointHoverBackgroundColor: '#fff',
+                            pointHoverBorderColor: '#4f46e5'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            r: {
+                                angleLines: { display: true },
+                                suggestedMin: 0,
+                                suggestedMax: 5
+                            }
+                        },
+                        plugins: { legend: { display: false } }
+                    }
+                });
+            });
+        </script>
+        {% endblock %}
+        """,
+        emp=emp_user,
+        reviews=reviews,
+        avg_overall=avg_overall,
+        avg_tech=avg_tech,
+        avg_comm=avg_comm,
+        avg_prod=avg_prod,
+        avg_team=avg_team,
+    )
+
+
+@app.route('/performance/review/add/<int:user_id>', methods=['GET', 'POST'])
+@login_required
+def add_performance_review(user_id):
+    if current_user.role != 'admin':
+        flash('Admin access required to add performance reviews.', 'danger')
+        return redirect(url_for('performance_dashboard'))
+
+    with get_db() as conn:
+        emp_user = conn.execute(
+            "SELECT id, username, role, full_name, email FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+
+        if emp_user is None:
+            flash('Employee user not found.', 'danger')
+            return redirect(url_for('performance_dashboard'))
+
+    if request.method == 'POST':
+        review_period = (request.form.get('review_period') or '').strip()
+        strengths = (request.form.get('strengths') or '').strip()
+        areas_for_improvement = (request.form.get('areas_for_improvement') or '').strip()
+        comments = (request.form.get('comments') or '').strip()
+
+        try:
+            overall_rating = float(request.form.get('overall_rating') or 0.0)
+            technical_skills_score = float(request.form.get('technical_skills_score') or 0.0)
+            communication_score = float(request.form.get('communication_score') or 0.0)
+            productivity_score = float(request.form.get('productivity_score') or 0.0)
+            teamwork_score = float(request.form.get('teamwork_score') or 0.0)
+        except ValueError:
+            flash('Scores must be valid numbers.', 'danger')
+            return redirect(url_for('add_performance_review', user_id=user_id))
+
+        if not review_period:
+            flash('Review period is required (e.g. Q1 2026).', 'danger')
+            return redirect(url_for('add_performance_review', user_id=user_id))
+
+        if not (1.0 <= overall_rating <= 5.0):
+            flash('Overall rating must be between 1.0 and 5.0.', 'danger')
+            return redirect(url_for('add_performance_review', user_id=user_id))
+
+        employee_name = str(emp_user['full_name'] or emp_user['username'])
+        created_at = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        with get_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO performance_reviews (
+                    employee_user_id, employee_name, reviewer_username, review_period,
+                    overall_rating, technical_skills_score, communication_score,
+                    productivity_score, teamwork_score, strengths, areas_for_improvement,
+                    comments, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user_id,
+                    employee_name,
+                    current_user.username,
+                    review_period,
+                    overall_rating,
+                    technical_skills_score,
+                    communication_score,
+                    productivity_score,
+                    teamwork_score,
+                    strengths,
+                    areas_for_improvement,
+                    comments,
+                    created_at,
+                ),
+            )
+            conn.commit()
+
+        flash('Performance review submitted successfully.', 'success')
+        return redirect(url_for('employee_performance_profile', user_id=user_id))
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Add Performance Review{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>Add Performance Review</h1>
+                <p>Evaluate manager review metrics for <strong>{{ emp.full_name or emp.username }}</strong>.</p>
+            </div>
+            <a class="btn btn-outline-secondary" href="{{ url_for('employee_performance_profile', user_id=emp.id) }}"><i class="bi bi-arrow-left me-1"></i>Cancel</a>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="card shadow-sm mx-auto" style="max-width: 760px;">
+            <div class="card-body">
+                <form method="post">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Review Period <span class="text-danger">*</span></label>
+                        <input class="form-control" name="review_period" placeholder="e.g. Q1 2026, Annual Review 2026" required>
+                    </div>
+                    
+                    <div class="mb-4 p-3 bg-light rounded border">
+                        <label class="form-label fw-bold text-primary mb-2"><i class="bi bi-star-fill me-1 text-warning"></i>Overall Rating (1.0 to 5.0) <span class="text-danger">*</span></label>
+                        <input class="form-control form-control-lg" type="number" step="0.1" min="1.0" max="5.0" name="overall_rating" placeholder="e.g. 4.5" required>
+                    </div>
+
+                    <h5 class="h6 fw-bold mb-3">Skills Score Breakdown (1.0 to 5.0)</h5>
+                    <div class="row g-3 mb-4">
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Technical Skills Score</label>
+                            <input class="form-control" type="number" step="0.1" min="1.0" max="5.0" name="technical_skills_score" value="4.0" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Communication Score</label>
+                            <input class="form-control" type="number" step="0.1" min="1.0" max="5.0" name="communication_score" value="4.0" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Productivity Score</label>
+                            <input class="form-control" type="number" step="0.1" min="1.0" max="5.0" name="productivity_score" value="4.0" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Teamwork Score</label>
+                            <input class="form-control" type="number" step="0.1" min="1.0" max="5.0" name="teamwork_score" value="4.0" required>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Key Strengths</label>
+                        <textarea class="form-control" name="strengths" rows="2" placeholder="Highlight key achievements and strong skill sets..."></textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Areas for Improvement</label>
+                        <textarea class="form-control" name="areas_for_improvement" rows="2" placeholder="Constructive feedback and areas to develop..."></textarea>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label fw-semibold">Additional Comments</label>
+                        <textarea class="form-control" name="comments" rows="2" placeholder="General manager notes or goal benchmarks..."></textarea>
+                    </div>
+
+                    <div class="d-flex justify-content-end gap-2">
+                        <a class="btn btn-outline-secondary" href="{{ url_for('employee_performance_profile', user_id=emp.id) }}">Cancel</a>
+                        <button class="btn btn-primary" type="submit"><i class="bi bi-check-circle me-1"></i>Save Performance Review</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        {% endblock %}
+        """,
+        emp=emp_user,
+    )
 
 
 if __name__ == "__main__":
