@@ -571,6 +571,63 @@ def notify_user_by_name_or_username(identifier, title, message, link=None):
         app.logger.error(f"Error in notify_user_by_name_or_username for '{identifier}': {e}")
 
 
+def ensure_settings_tables():
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS company_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_name TEXT DEFAULT 'HRMS Enterprise Solutions',
+                company_email TEXT DEFAULT 'contact@hrms.com',
+                company_address TEXT DEFAULT '123 Business Park, Tech Zone, India',
+                currency TEXT DEFAULT 'INR (₹)',
+                working_hours TEXT DEFAULT '09:00 - 18:00 (Mon-Fri)',
+                gst_number TEXT DEFAULT '27AAAAA0000A1Z5'
+            )
+        """)
+        row = conn.execute("SELECT COUNT(*) FROM company_settings").fetchone()[0]
+        if row == 0:
+            conn.execute("""
+                INSERT INTO company_settings (company_name, company_email, company_address, currency, working_hours, gst_number)
+                VALUES ('HRMS Enterprise Solutions', 'contact@hrms.com', '123 Business Park, Tech Zone, India', 'INR (₹)', '09:00 - 18:00 (Mon-Fri)', '27AAAAA0000A1Z5')
+            """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_id INTEGER PRIMARY KEY,
+                theme TEXT DEFAULT 'light',
+                sidebar_style TEXT DEFAULT 'default',
+                email_notifications INTEGER DEFAULT 1,
+                in_app_notifications INTEGER DEFAULT 1,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            )
+        """)
+        conn.commit()
+
+
+@app.template_filter('inr')
+def format_inr(amount):
+    """Format numeric salary/currency amounts into Indian Rupee (INR / ₹) standard format."""
+    if amount is None or amount == '':
+        return "₹0.00"
+    try:
+        val = float(amount)
+        s, *decimal = f"{val:.2f}".split('.')
+        dec = f".{decimal[0]}" if decimal else ""
+        if len(s) <= 3:
+            return f"₹{s}{dec}"
+        last_three = s[-3:]
+        other_digits = s[:-3]
+        res = ""
+        while len(other_digits) > 2:
+            res = "," + other_digits[-2:] + res
+            other_digits = other_digits[:-2]
+        if other_digits:
+            res = other_digits + res
+        return f"₹{res},{last_three}{dec}"
+    except Exception:
+        return f"₹{amount}"
+
+
 def init_db():
     with get_db() as conn:
         conn.execute(
@@ -595,6 +652,7 @@ def init_db():
         ensure_leave_requests_table()
         ensure_performance_reviews_table()
         ensure_notifications_table()
+        ensure_settings_tables()
 
         admin_exists = conn.execute(
             "SELECT COUNT(*) FROM users WHERE username = ?",
@@ -6347,6 +6405,572 @@ def user_notifications():
         {% endblock %}
         """,
         notifications=notifications,
+    )
+
+
+# Settings Module Routes
+
+@app.route('/settings')
+@login_required
+def settings_overview():
+    return redirect(url_for('settings_profile'))
+
+
+@app.route('/settings/profile', methods=['GET', 'POST'])
+@login_required
+def settings_profile():
+    if request.method == 'POST':
+        full_name = request.form.get('full_name', '').strip()
+        email = request.form.get('email', '').strip()
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE users SET full_name = ?, email = ? WHERE id = ?",
+                (full_name or None, email or None, current_user.id)
+            )
+            conn.commit()
+        notify_user_by_name_or_username(current_user.username, "Profile Updated", "Your account profile information was updated.", url_for('settings_profile'))
+        flash('Profile settings updated successfully.', 'success')
+        return redirect(url_for('settings_profile'))
+
+    with get_db() as conn:
+        u = conn.execute("SELECT id, username, full_name, email, role FROM users WHERE id = ?", (current_user.id,)).fetchone()
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Profile Settings - Settings{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h1><i class="bi bi-person-gear me-2 text-primary"></i>Profile Settings</h1>
+                <p>Manage your account profile, personal info, and contact details.</p>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="row g-4">
+            <div class="col-md-4">
+                <div class="card shadow-sm text-center p-4">
+                    <div class="mb-3">
+                        <div class="rounded-circle bg-primary bg-opacity-10 d-inline-flex align-items-center justify-content-center" style="width: 80px; height: 80px;">
+                            <i class="bi bi-person-fill fs-1 text-primary"></i>
+                        </div>
+                    </div>
+                    <h5 class="fw-bold mb-1">{{ u.full_name or u.username }}</h5>
+                    <p class="text-muted small mb-2">@{{ u.username }}</p>
+                    <span class="badge bg-primary px-3 py-2 align-self-center text-uppercase">{{ u.role }}</span>
+                </div>
+            </div>
+
+            <div class="col-md-8">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-white py-3 border-0">
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-pencil-square me-2 text-primary"></i>Edit Personal Information</h5>
+                    </div>
+                    <div class="card-body">
+                        <form method="POST" action="{{ url_for('settings_profile') }}">
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Username</label>
+                                <input type="text" class="form-control bg-light" value="{{ u.username }}" readonly disabled>
+                                <div class="form-text">Usernames are permanently linked to authentication.</div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Full Name</label>
+                                <input type="text" class="form-control" name="full_name" value="{{ u.full_name or '' }}" placeholder="Enter full name" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Email Address</label>
+                                <input type="email" class="form-control" name="email" value="{{ u.email or '' }}" placeholder="Enter email address">
+                            </div>
+                            <button type="submit" class="btn btn-primary"><i class="bi bi-check-circle me-1"></i>Save Profile Changes</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endblock %}
+        """,
+        u=u
+    )
+
+
+@app.route('/settings/security', methods=['GET', 'POST'])
+@login_required
+def settings_security():
+    if request.method == 'POST':
+        action = request.form.get('action')
+        if action == 'change_password':
+            curr_pw = request.form.get('current_password', '').strip()
+            new_pw = request.form.get('new_password', '').strip()
+            conf_pw = request.form.get('confirm_password', '').strip()
+
+            if not check_password_hash(current_user.password_hash, curr_pw):
+                flash('Current password is incorrect.', 'danger')
+                return redirect(url_for('settings_security'))
+            if new_pw != conf_pw:
+                flash('New passwords do not match.', 'danger')
+                return redirect(url_for('settings_security'))
+            if len(new_pw) < 6:
+                flash('New password must be at least 6 characters.', 'danger')
+                return redirect(url_for('settings_security'))
+
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE users SET password_hash = ?, force_password_change = 0 WHERE id = ?",
+                    (generate_password_hash(new_pw), current_user.id)
+                )
+                conn.commit()
+            current_user.password_hash = generate_password_hash(new_pw)
+            current_user.force_password_change = False
+            create_notification(current_user.id, "Security Alert: Password Changed", "Your account password was changed successfully.", url_for('settings_security'))
+            flash('Password updated successfully.', 'success')
+            return redirect(url_for('settings_security'))
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Security Settings - Settings{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h1><i class="bi bi-shield-lock me-2 text-primary"></i>Security Settings</h1>
+                <p>Manage account security, update authentication passwords, and monitor sessions.</p>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="row g-4">
+            <div class="col-md-6">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white py-3 border-0">
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-key me-2 text-primary"></i>Change Account Password</h5>
+                    </div>
+                    <div class="card-body">
+                        <form method="POST" action="{{ url_for('settings_security') }}">
+                            <input type="hidden" name="action" value="change_password">
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Current Password</label>
+                                <input type="password" class="form-control" name="current_password" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">New Password</label>
+                                <input type="password" class="form-control" name="new_password" minlength="6" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Confirm New Password</label>
+                                <input type="password" class="form-control" name="confirm_password" minlength="6" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary"><i class="bi bi-shield-check me-1"></i>Update Password</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white py-3 border-0">
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-shield-check me-2 text-success"></i>Security & Session Overview</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="d-flex align-items-center mb-3 p-3 bg-light rounded">
+                            <i class="bi bi-person-badge fs-2 text-primary me-3"></i>
+                            <div>
+                                <h6 class="mb-0 fw-bold">Role Privilege</h6>
+                                <span class="text-muted small">Account role level: <span class="badge bg-secondary text-uppercase">{{ current_user.role }}</span></span>
+                            </div>
+                        </div>
+                        <div class="d-flex align-items-center mb-3 p-3 bg-light rounded">
+                            <i class="bi bi-laptop fs-2 text-success me-3"></i>
+                            <div>
+                                <h6 class="mb-0 fw-bold">Active Web Session</h6>
+                                <span class="text-muted small">Logged in as @{{ current_user.username }}</span>
+                            </div>
+                        </div>
+                        <div class="d-flex align-items-center p-3 bg-light rounded">
+                            <i class="bi bi-lock-fill fs-2 text-info me-3"></i>
+                            <div>
+                                <h6 class="mb-0 fw-bold">Two-Factor Authentication</h6>
+                                <span class="text-muted small">Standard Session Encryption Active</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endblock %}
+        """
+    )
+
+
+@app.route('/settings/appearance', methods=['GET', 'POST'])
+@login_required
+def settings_appearance():
+    if request.method == 'POST':
+        theme = request.form.get('theme', 'light').strip()
+        sidebar_style = request.form.get('sidebar_style', 'default').strip()
+        with get_db() as conn:
+            conn.execute("""
+                INSERT INTO user_preferences (user_id, theme, sidebar_style)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET theme = excluded.theme, sidebar_style = excluded.sidebar_style
+            """, (current_user.id, theme, sidebar_style))
+            conn.commit()
+        flash('Appearance preferences saved.', 'success')
+        return redirect(url_for('settings_appearance'))
+
+    with get_db() as conn:
+        pref = conn.execute("SELECT theme, sidebar_style FROM user_preferences WHERE user_id = ?", (current_user.id,)).fetchone()
+
+    theme = pref['theme'] if pref else 'light'
+    sidebar_style = pref['sidebar_style'] if pref else 'default'
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Appearance Settings - Settings{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h1><i class="bi bi-palette me-2 text-primary"></i>Appearance Settings</h1>
+                <p>Customize UI color themes, layout density, and sidebar preferences.</p>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-white py-3 border-0">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-sliders me-2 text-primary"></i>Theme & Layout Customization</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('settings_appearance') }}">
+                    <div class="mb-4">
+                        <label class="form-label fw-bold">Interface Theme</label>
+                        <div class="row g-3">
+                            <div class="col-md-4">
+                                <div class="form-check card p-3 border text-center h-100">
+                                    <input class="form-check-input mx-auto mb-2" type="radio" name="theme" id="themeLight" value="light" {% if theme == 'light' %}checked{% endif %}>
+                                    <label class="form-check-label fw-semibold cursor-pointer" for="themeLight">
+                                        <i class="bi bi-sun fs-2 text-warning d-block mb-1"></i>
+                                        Light Theme
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="form-check card p-3 border text-center h-100">
+                                    <input class="form-check-input mx-auto mb-2" type="radio" name="theme" id="themeDark" value="dark" {% if theme == 'dark' %}checked{% endif %}>
+                                    <label class="form-check-label fw-semibold cursor-pointer" for="themeDark">
+                                        <i class="bi bi-moon-stars fs-2 text-primary d-block mb-1"></i>
+                                        Dark Mode
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="form-check card p-3 border text-center h-100">
+                                    <input class="form-check-input mx-auto mb-2" type="radio" name="theme" id="themeSystem" value="system" {% if theme == 'system' %}checked{% endif %}>
+                                    <label class="form-check-label fw-semibold cursor-pointer" for="themeSystem">
+                                        <i class="bi bi-display fs-2 text-secondary d-block mb-1"></i>
+                                        System Theme
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label fw-bold">Sidebar Display Preference</label>
+                        <select name="sidebar_style" class="form-select">
+                            <option value="default" {% if sidebar_style == 'default' %}selected{% endif %}>Expanded Default Sidebar</option>
+                            <option value="compact" {% if sidebar_style == 'compact' %}selected{% endif %}>Compact Navigation Bar</option>
+                        </select>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary"><i class="bi bi-check-circle me-1"></i>Save Appearance</button>
+                </form>
+            </div>
+        </div>
+        {% endblock %}
+        """,
+        theme=theme,
+        sidebar_style=sidebar_style
+    )
+
+
+@app.route('/settings/company', methods=['GET', 'POST'])
+@login_required
+def settings_company():
+    if current_user.role != 'admin':
+        flash('Admin access required for Company Settings.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    if request.method == 'POST':
+        c_name = request.form.get('company_name', '').strip()
+        c_email = request.form.get('company_email', '').strip()
+        c_address = request.form.get('company_address', '').strip()
+        w_hours = request.form.get('working_hours', '').strip()
+        gst = request.form.get('gst_number', '').strip()
+
+        with get_db() as conn:
+            conn.execute("""
+                UPDATE company_settings
+                SET company_name = ?, company_email = ?, company_address = ?, working_hours = ?, gst_number = ?
+                WHERE id = 1
+            """, (c_name, c_email, c_address, w_hours, gst))
+            conn.commit()
+        flash('Company settings updated successfully.', 'success')
+        return redirect(url_for('settings_company'))
+
+    with get_db() as conn:
+        cs = conn.execute("SELECT company_name, company_email, company_address, working_hours, gst_number FROM company_settings WHERE id = 1").fetchone()
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Company Settings - Settings{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h1><i class="bi bi-building-gear me-2 text-primary"></i>Company Settings</h1>
+                <p>Configure enterprise organization details, working hours, and GST credentials.</p>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-white py-3 border-0">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-building me-2 text-primary"></i>Enterprise Profile & Operational Parameters</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('settings_company') }}">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Company Legal Name</label>
+                            <input type="text" class="form-control" name="company_name" value="{{ cs.company_name if cs else '' }}" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Contact Email</label>
+                            <input type="email" class="form-control" name="company_email" value="{{ cs.company_email if cs else '' }}" required>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-semibold">Corporate Address</label>
+                            <textarea class="form-control" name="company_address" rows="2" required>{{ cs.company_address if cs else '' }}</textarea>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">Standard Working Hours</label>
+                            <input type="text" class="form-control" name="working_hours" value="{{ cs.working_hours if cs else '' }}" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold">GST / Tax Registration Number</label>
+                            <input type="text" class="form-control" name="gst_number" value="{{ cs.gst_number if cs else '' }}" required>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary mt-4"><i class="bi bi-check-circle me-1"></i>Save Company Settings</button>
+                </form>
+            </div>
+        </div>
+        {% endblock %}
+        """,
+        cs=cs
+    )
+
+
+@app.route('/settings/payroll', methods=['GET', 'POST'])
+@login_required
+def settings_payroll():
+    if current_user.role != 'admin':
+        flash('Admin access required for Payroll Settings.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    if request.method == 'POST':
+        currency = request.form.get('currency', 'INR (₹)').strip()
+        with get_db() as conn:
+            conn.execute("UPDATE company_settings SET currency = ? WHERE id = 1", (currency,))
+            conn.commit()
+        flash('Payroll currency and settings updated.', 'success')
+        return redirect(url_for('settings_payroll'))
+
+    with get_db() as conn:
+        cs = conn.execute("SELECT currency FROM company_settings WHERE id = 1").fetchone()
+
+    currency = cs['currency'] if cs else 'INR (₹)'
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Payroll Settings - Settings{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h1><i class="bi bi-currency-rupee me-2 text-primary"></i>Payroll & Currency Settings</h1>
+                <p>Manage salary calculation parameters, tax configurations, and system currency formatting.</p>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-white py-3 border-0">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-cash-stack me-2 text-success"></i>Global Currency & Payroll Parameters</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('settings_payroll') }}">
+                    <div class="mb-4">
+                        <label class="form-label fw-bold">Primary HRMS Currency</label>
+                        <select name="currency" class="form-select">
+                            <option value="INR (₹)" {% if currency == 'INR (₹)' %}selected{% endif %}>Indian Rupee (INR - ₹)</option>
+                            <option value="USD ($)" {% if currency == 'USD ($)' %}selected{% endif %}>US Dollar (USD - $)</option>
+                        </select>
+                        <div class="form-text text-muted">Selected currency symbol (₹) is applied across all employee profiles and financial report views.</div>
+                    </div>
+
+                    <div class="row g-3 mb-4">
+                        <div class="col-md-6">
+                            <div class="p-3 bg-light rounded border">
+                                <h6 class="fw-bold mb-1"><i class="bi bi-calendar-range me-2 text-primary"></i>Default Pay Cycle</h6>
+                                <p class="text-muted small mb-0">Monthly Salary Cycle (1st to 30th/31st of every month)</p>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="p-3 bg-light rounded border">
+                                <h6 class="fw-bold mb-1"><i class="bi bi-file-earmark-text me-2 text-primary"></i>Taxation Structure</h6>
+                                <p class="text-muted small mb-0">Standard Indian Income Tax (TDS) Slabs</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary"><i class="bi bi-check-circle me-1"></i>Save Payroll Settings</button>
+                </form>
+            </div>
+        </div>
+        {% endblock %}
+        """,
+        currency=currency
+    )
+
+
+@app.route('/settings/notifications', methods=['GET', 'POST'])
+@login_required
+def settings_notifications():
+    if request.method == 'POST':
+        email_notif = 1 if request.form.get('email_notifications') == 'on' else 0
+        in_app_notif = 1 if request.form.get('in_app_notifications') == 'on' else 0
+        with get_db() as conn:
+            conn.execute("""
+                INSERT INTO user_preferences (user_id, email_notifications, in_app_notifications)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET email_notifications = excluded.email_notifications, in_app_notifications = excluded.in_app_notifications
+            """, (current_user.id, email_notif, in_app_notif))
+            conn.commit()
+        flash('Notification preferences updated.', 'success')
+        return redirect(url_for('settings_notifications'))
+
+    with get_db() as conn:
+        pref = conn.execute("SELECT email_notifications, in_app_notifications FROM user_preferences WHERE user_id = ?", (current_user.id,)).fetchone()
+
+    email_notif = pref['email_notifications'] if pref else 1
+    in_app_notif = pref['in_app_notifications'] if pref else 1
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Notification Settings - Settings{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h1><i class="bi bi-bell-gear me-2 text-primary"></i>Notification Settings</h1>
+                <p>Configure notification delivery channels and automated system alerts.</p>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-white py-3 border-0">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-sliders me-2 text-primary"></i>Alert Delivery Channels</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('settings_notifications') }}">
+                    <div class="form-check form-switch mb-3 p-3 bg-light rounded border d-flex justify-content-between align-items-center">
+                        <label class="form-check-label fw-semibold cursor-pointer" for="inAppSwitch">
+                            <i class="bi bi-bell-fill me-2 text-primary"></i>In-App Topbar Notifications
+                            <span class="d-block text-muted small fw-normal">Receive real-time bell dropdown alerts for task, leave, and security events.</span>
+                        </label>
+                        <input class="form-check-input ms-3" type="checkbox" role="switch" id="inAppSwitch" name="in_app_notifications" {% if in_app_notif %}checked{% endif %}>
+                    </div>
+
+                    <div class="form-check form-switch mb-4 p-3 bg-light rounded border d-flex justify-content-between align-items-center">
+                        <label class="form-check-label fw-semibold cursor-pointer" for="emailSwitch">
+                            <i class="bi bi-envelope-check-fill me-2 text-success"></i>Email Digest & Alerts
+                            <span class="d-block text-muted small fw-normal">Receive automated email alerts for assigned tasks and leave status updates.</span>
+                        </label>
+                        <input class="form-check-input ms-3" type="checkbox" role="switch" id="emailSwitch" name="email_notifications" {% if email_notif %}checked{% endif %}>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary"><i class="bi bi-check-circle me-1"></i>Save Notification Preferences</button>
+                </form>
+            </div>
+        </div>
+        {% endblock %}
+        """,
+        email_notif=email_notif,
+        in_app_notif=in_app_notif
     )
 
 

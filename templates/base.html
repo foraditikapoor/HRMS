@@ -50,8 +50,26 @@
                             <a class="sidebar-sublink {% if active_endpoint == 'reports_projects' %}active{% endif %}" href="{{ url_for('reports_projects') }}"><i class="bi bi-kanban"></i><span>Projects</span></a>
                         </div>
                     </div>
+                {% set is_settings_active = active_endpoint in ['settings_overview', 'settings_profile', 'settings_security', 'settings_appearance', 'settings_company', 'settings_payroll', 'settings_notifications'] %}
+                <div>
+                    <a class="sidebar-link {% if is_settings_active %}active{% endif %} d-flex justify-content-between align-items-center" data-bs-toggle="collapse" href="#settingsSubmenu" role="button" aria-expanded="{% if is_settings_active %}true{% else %}false{% endif %}" aria-controls="settingsSubmenu">
+                        <div class="d-flex align-items-center gap-3">
+                            <i class="bi bi-gear-fill"></i>
+                            <span>Settings</span>
+                        </div>
+                        <i class="bi bi-chevron-down small" style="font-size: 11px;"></i>
+                    </a>
+                    <div class="collapse {% if is_settings_active %}show{% endif %}" id="settingsSubmenu">
+                        <div class="sidebar-submenu">
+                            <a class="sidebar-sublink {% if active_endpoint == 'settings_profile' %}active{% endif %}" href="{{ url_for('settings_profile') }}"><i class="bi bi-person-gear"></i><span>Profile</span></a>
+                            <a class="sidebar-sublink {% if active_endpoint == 'settings_security' %}active{% endif %}" href="{{ url_for('settings_security') }}"><i class="bi bi-shield-lock"></i><span>Security</span></a>
+                            <a class="sidebar-sublink {% if active_endpoint == 'settings_appearance' %}active{% endif %}" href="{{ url_for('settings_appearance') }}"><i class="bi bi-palette"></i><span>Appearance</span></a>
+                            {% if is_admin %}<a class="sidebar-sublink {% if active_endpoint == 'settings_company' %}active{% endif %}" href="{{ url_for('settings_company') }}"><i class="bi bi-building-gear"></i><span>Company</span></a>{% endif %}
+                            {% if is_admin %}<a class="sidebar-sublink {% if active_endpoint == 'settings_payroll' %}active{% endif %}" href="{{ url_for('settings_payroll') }}"><i class="bi bi-currency-rupee"></i><span>Payroll</span></a>{% endif %}
+                            <a class="sidebar-sublink {% if active_endpoint == 'settings_notifications' %}active{% endif %}" href="{{ url_for('settings_notifications') }}"><i class="bi bi-bell-gear"></i><span>Notifications</span></a>
+                        </div>
+                    </div>
                 </div>
-                <span class="sidebar-link disabled" title="This module is not available yet"><i class="bi bi-gear"></i><span>Settings</span></span>
                 {% if is_admin %}<a class="sidebar-link {% if active_endpoint in ['admin_users', 'create_user', 'admin'] %}active{% endif %}" href="{{ url_for('admin_users') }}"><i class="bi bi-person-gear"></i><span>User Accounts</span></a>{% endif %}
             </nav>
             <div class="sidebar-footer"><span class="status-dot"></span><span>System online</span></div>
