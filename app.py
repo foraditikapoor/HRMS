@@ -541,6 +541,36 @@ def notify_admins(title, message, link=None):
         app.logger.error(f"Error notifying admins: {e}")
 
 
+def notify_user_by_name_or_username(identifier, title, message, link=None):
+    """Centralized helper: maps a username, full_name, or employee name (including comma-separated lists)
+    to underlying login user_id records and pushes notifications consistently.
+    """
+    if not identifier:
+        return
+    try:
+        raw_list = [n.strip() for n in str(identifier).split(',') if n.strip()]
+        for name in raw_list:
+            with get_db() as conn:
+                # 1. Match users table username or full_name
+                user = conn.execute(
+                    "SELECT id FROM users WHERE username = ? OR full_name = ? ORDER BY id LIMIT 1",
+                    (name, name)
+                ).fetchone()
+                if user and user['id']:
+                    create_notification(user['id'], title, message, link)
+                    continue
+
+                # 2. Match employees table name -> user_id
+                emp = conn.execute(
+                    "SELECT user_id FROM employees WHERE name = ? AND user_id IS NOT NULL ORDER BY id LIMIT 1",
+                    (name,)
+                ).fetchone()
+                if emp and emp['user_id']:
+                    create_notification(emp['user_id'], title, message, link)
+    except Exception as e:
+        app.logger.error(f"Error in notify_user_by_name_or_username for '{identifier}': {e}")
+
+
 def init_db():
     with get_db() as conn:
         conn.execute(
@@ -754,6 +784,7 @@ def change_password():
         current_user.password_hash = generate_password_hash(new_pw)
         current_user.force_password_change = False
 
+        create_notification(current_user.id, "Security Alert: Password Changed", "Your account password was updated successfully. If you did not make this change, please contact HR.", url_for('dashboard'))
         flash('Password changed successfully.', 'success')
         return redirect(url_for('dashboard'))
 
@@ -1107,7 +1138,7 @@ def update_task(task_id):
 
     with get_db() as conn:
         task = conn.execute(
-            "SELECT id, assigned_to, status FROM tasks WHERE id = ?",
+            "SELECT id, title, assigned_to, assigned_by, status FROM tasks WHERE id = ?",
             (task_id,),
         ).fetchone()
         employee_names = get_user_task_names(conn, current_user)
@@ -1152,6 +1183,8 @@ def update_task(task_id):
                 (status, completed_by, task_id),
             )
             conn.commit()
+            notify_admins("Task Status Update", f"Task '{task['title']}' status updated to '{status}' by {current_user.username}.", url_for('task_management'))
+            notify_user_by_name_or_username(task['assigned_by'], "Task Status Update", f"Task '{task['title']}' status updated to '{status}' by {current_user.username}.", url_for('task_management'))
         elif hours_value is not None:
             conn.commit()
 
@@ -1266,6 +1299,7 @@ def task_management():
                     ),
                 )
                 conn.commit()
+            notify_user_by_name_or_username(assigned_to, "Task Assignment Updated", f"Your assigned task '{title}' for project '{project}' was updated.", url_for('my_tasks'))
             flash('Task updated successfully.', 'success')
             return redirect(url_for('task_management'))
 
@@ -1292,6 +1326,7 @@ def task_management():
                 ),
             )
             conn.commit()
+        notify_user_by_name_or_username(assigned_to, "New Task Assigned", f"You were assigned task '{title}' for project '{project}' (Deadline: {deadline}).", url_for('my_tasks'))
         flash('Task created successfully.', 'success')
         return redirect(url_for('task_management'))
 
@@ -1735,6 +1770,7 @@ def punch_in():
                 (user_id, username, today, now),
             )
         conn.commit()
+    create_notification(current_user.id, "Attendance: Punched In", f"Punch-in recorded for today ({today}). Have a productive day!", url_for('dashboard'))
     flash('Punch in recorded.', 'success')
     return redirect(url_for('dashboard'))
 
@@ -1769,6 +1805,8 @@ def punch_out():
             (now, total_hours, rec['id']),
         )
         conn.commit()
+    hrs_str = f" ({total_hours:.1f} hrs logged)" if total_hours is not None else ""
+    create_notification(current_user.id, "Attendance: Punched Out", f"Punch-out recorded for today ({today}){hrs_str}.", url_for('dashboard'))
     flash('Punch out recorded.', 'success')
     return redirect(url_for('dashboard'))
 
@@ -2252,6 +2290,8 @@ def edit_employee(emp_id):
                     (name, address, education, experience, contact_number, emergency_contact, department, salary, pan_path, aadhaar_path, other_path, emp_id),
                 )
                 conn.commit()
+            if r['user_id']:
+                create_notification(r['user_id'], "Employee Profile Updated", "Your employee records and profile documents were updated by administration.", url_for('dashboard'))
             flash('Employee updated.', 'success')
             return redirect(url_for('view_employee', emp_id=emp_id))
         current_depts = (r['department'] or '').split(',') if r['department'] else []
@@ -2828,6 +2868,7 @@ def legacy_add_project():
             )
             conn.commit()
 
+        notify_user_by_name_or_username(assigned_to, "Assigned to New Project", f"You have been assigned to project for client.", url_for('dashboard'))
         flash('Project created successfully.', 'success')
         return redirect(url_for('admin_projects'))
 
