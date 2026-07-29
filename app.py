@@ -1843,31 +1843,49 @@ def admin_employees():
                     <h1 class="h3 me-auto mb-0">Employee Management</h1>
                     <a class="btn btn-success" href="{{ url_for('create_user') }}">Create User</a>
                 </div>
+
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        {% for category, message in messages %}
+                            <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                                {{ message }}
+                                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+
                 <div class="card shadow-sm">
                     <div class="card-body">
                         <div class="table-responsive">
-                            <table class="table table-striped">
+                            <table class="table table-striped align-middle mb-0">
                                 <thead>
                                     <tr>
                                         <th>Name</th>
                                         <th>Department</th>
                                         <th>Salary</th>
-                                        <th>Actions</th>
+                                        <th class="text-end">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                 {% for r in rows %}
                                     <tr>
-                                        <td>{{ r.name }}</td>
+                                        <td class="fw-bold">{{ r.name }}</td>
                                         <td>{{ r.department or '' }}</td>
                                         <td>{{ r.salary or '' }}</td>
-                                        <td>
-                                            <a class="btn btn-sm btn-primary" href="{{ url_for('view_employee', emp_id=r.id) }}">View</a>
-                                            <a class="btn btn-sm btn-secondary" href="{{ url_for('edit_employee', emp_id=r.id) }}">Edit</a>
-                                            <form method="post" action="{{ url_for('delete_employee', emp_id=r.id) }}" style="display:inline-block;" onsubmit="return confirm('Delete this employee?');">
-                                                <button class="btn btn-sm btn-danger" type="submit">Delete</button>
-                                            </form>
+                                        <td class="text-end">
+                                            <div class="d-inline-flex gap-1">
+                                                <a class="btn btn-sm btn-primary" href="{{ url_for('view_employee', emp_id=r.id) }}">View</a>
+                                                <a class="btn btn-sm btn-secondary" href="{{ url_for('edit_employee', emp_id=r.id) }}">Edit</a>
+                                                <form method="post" action="{{ url_for('delete_employee', emp_id=r.id) }}" style="display:inline-block;" onsubmit="return confirm('Are you sure you want to permanently delete employee {{ r.name }} and all associated user records? This action cannot be undone.');">
+                                                    <button class="btn btn-sm btn-danger" type="submit">Delete</button>
+                                                </form>
+                                            </div>
                                         </td>
+                                    </tr>
+                                {% else %}
+                                    <tr>
+                                        <td colspan="4" class="text-center text-muted py-4">No employees found.</td>
                                     </tr>
                                 {% endfor %}
                                 </tbody>
@@ -1876,6 +1894,7 @@ def admin_employees():
                     </div>
                 </div>
             </div>
+            <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
         </body>
         </html>
         """,
@@ -2164,24 +2183,49 @@ def edit_employee(emp_id):
 @app.route('/admin/employees/<int:emp_id>/delete', methods=['POST'])
 @login_required
 def delete_employee(emp_id):
-        if current_user.role != 'admin':
-            flash('Admin access required.', 'danger')
-            return redirect(url_for('dashboard'))
-        with get_db() as conn:
-            r = conn.execute('SELECT * FROM employees WHERE id = ?', (emp_id,)).fetchone()
-            if not r:
-                flash('Employee not found.', 'warning')
-                return redirect(url_for('admin_employees'))
-            for p in (r['pan_path'], r['aadhaar_path'], r['other_docs_path']):
-                try:
-                    if p and os.path.exists(p):
-                        os.remove(p)
-                except Exception:
-                    pass
-            conn.execute('DELETE FROM employees WHERE id = ?', (emp_id,))
-            conn.commit()
-        flash('Employee deleted.', 'success')
-        return redirect(url_for('admin_employees'))
+    if current_user.role != 'admin':
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    with get_db() as conn:
+        r = conn.execute('SELECT * FROM employees WHERE id = ?', (emp_id,)).fetchone()
+        if not r:
+            flash('Employee not found.', 'warning')
+            return redirect(url_for('admin_employees'))
+
+        linked_user_id = r['user_id'] if 'user_id' in r.keys() else None
+        employee_name = r['name']
+
+        # Prevent active admin self-deletion
+        if linked_user_id and linked_user_id == current_user.id:
+            flash('You cannot delete your own active admin account.', 'danger')
+            return redirect(url_for('admin_employees'))
+
+        # Remove physical upload files
+        for p in (r['pan_path'], r['aadhaar_path'], r['other_docs_path']):
+            try:
+                if p and os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
+        if linked_user_id:
+            # Delete dependent records linked by user_id
+            conn.execute('DELETE FROM attendance WHERE user_id = ?', (linked_user_id,))
+            conn.execute('DELETE FROM leave_requests WHERE user_id = ?', (linked_user_id,))
+            conn.execute('DELETE FROM performance_reviews WHERE employee_user_id = ?', (linked_user_id,))
+            conn.execute('DELETE FROM time_logs WHERE user_id = ?', (linked_user_id,))
+            conn.execute('DELETE FROM users WHERE id = ?', (linked_user_id,))
+
+        # Update tasks assigned to this employee to 'Unassigned'
+        conn.execute('UPDATE tasks SET assigned_to = ? WHERE assigned_to = ?', ('Unassigned', employee_name))
+
+        # Delete employee record
+        conn.execute('DELETE FROM employees WHERE id = ?', (emp_id,))
+        conn.commit()
+
+    flash(f"Employee '{employee_name}' and all associated user records deleted successfully.", 'success')
+    return redirect(url_for('admin_employees'))
 
 
 @app.route('/admin/clients')
