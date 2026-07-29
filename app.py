@@ -490,6 +490,57 @@ def ensure_performance_reviews_table():
         conn.commit()
 
 
+def ensure_notifications_table():
+    """Create notifications table if it does not exist.
+    Notifications are linked to login users (users.id), NOT employee records.
+    """
+    with get_db() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                link TEXT,
+                is_read INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.commit()
+
+
+def create_notification(user_id, title, message, link=None):
+    """Helper to push an in-app notification to a specific user (by user_id)."""
+    try:
+        created_at = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        with get_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO notifications (user_id, title, message, link, is_read, created_at)
+                VALUES (?, ?, ?, ?, 0, ?)
+                """,
+                (user_id, title, message, link, created_at)
+            )
+            conn.commit()
+    except Exception as e:
+        app.logger.error(f"Error creating notification: {e}")
+
+
+def notify_admins(title, message, link=None):
+    """Helper to push an in-app notification to all admin users."""
+    try:
+        with get_db() as conn:
+            admin_rows = conn.execute("SELECT id FROM users WHERE role = 'admin'").fetchall()
+            admin_ids = [r['id'] for r in admin_rows]
+        for aid in admin_ids:
+            create_notification(aid, title, message, link)
+    except Exception as e:
+        app.logger.error(f"Error notifying admins: {e}")
+
+
 def init_db():
     with get_db() as conn:
         conn.execute(
@@ -513,6 +564,7 @@ def init_db():
         ensure_time_logs_table()
         ensure_leave_requests_table()
         ensure_performance_reviews_table()
+        ensure_notifications_table()
 
         admin_exists = conn.execute(
             "SELECT COUNT(*) FROM users WHERE username = ?",
@@ -1586,12 +1638,15 @@ def create_user():
                         "INSERT INTO users (username, password_hash, role, full_name, email, force_password_change) VALUES (?, ?, ?, ?, ?, ?)",
                         (username, generate_password_hash(temp_password), role, full_name, email, 1),
                     )
+                    new_user_id = cursor.lastrowid
                     if role == "employee":
                         conn.execute(
                             "INSERT INTO employees (user_id, name) VALUES (?, ?)",
-                            (cursor.lastrowid, full_name),
+                            (new_user_id, full_name),
                         )
                     conn.commit()
+                    create_notification(new_user_id, "Welcome to HRMS", f"Hello {full_name}, your account (@{username}) has been created.", url_for('dashboard'))
+                    notify_admins("New User Account Created", f"Account created for {full_name} (@{username}) with role {role}.", url_for('admin_users'))
                     send_welcome_email(email, full_name, username, temp_password)
                     message = (
                         f"User created successfully. Temporary password: {temp_password}"
@@ -3349,6 +3404,7 @@ def apply_leave():
             conn.commit()
             leave_id = cursor.lastrowid
 
+        notify_admins(f"New Leave Request ({leave_type})", f"{employee_name} applied for {total_days} day(s) of {leave_type}.", url_for('pending_leave_requests'))
         msg = 'Leave request submitted successfully.'
         flash(msg, 'success')
         if request.is_json:
@@ -3949,6 +4005,7 @@ def approve_leave(leave_id):
         )
         conn.commit()
 
+    create_notification(req['user_id'], "Leave Request Approved", f"Your {req['leave_type']} request ({req['start_date']} to {req['end_date']}) has been approved.", url_for('my_leave_requests'))
     msg = 'Leave request approved successfully.'
     flash(msg, 'success')
     if request.is_json:
@@ -4015,6 +4072,7 @@ def reject_leave(leave_id):
         )
         conn.commit()
 
+    create_notification(req['user_id'], "Leave Request Rejected", f"Your {req['leave_type']} request ({req['start_date']} to {req['end_date']}) was rejected.", url_for('my_leave_requests'))
     msg = 'Leave request rejected successfully.'
     flash(msg, 'success')
     if request.is_json:
@@ -4609,6 +4667,7 @@ def add_performance_review(user_id):
             )
             conn.commit()
 
+        create_notification(user_id, "New Performance Review Published", f"You received a review for {review_period} with score {overall_rating:.1f} ★.", url_for('employee_performance_profile', user_id=user_id))
         flash('Performance review submitted successfully.', 'success')
         return redirect(url_for('employee_performance_profile', user_id=user_id))
 
@@ -6121,6 +6180,131 @@ def reports_projects():
         selected_status=selected_status,
     )
 
+
+
+# Notification API & View Routes
+
+@app.route('/api/notifications')
+@login_required
+def api_get_notifications():
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, title, message, link, is_read, created_at
+            FROM notifications
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT 15
+            """,
+            (current_user.id,)
+        ).fetchall()
+
+        unread_count = conn.execute(
+            "SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0",
+            (current_user.id,)
+        ).fetchone()[0]
+
+    notifs = [dict(r) for r in rows]
+    return jsonify({'unread_count': unread_count, 'notifications': notifs})
+
+
+@app.route('/api/notifications/<int:notif_id>/read', methods=['POST'])
+@login_required
+def api_mark_notification_read(notif_id):
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?",
+            (notif_id, current_user.id)
+        )
+        conn.commit()
+    return jsonify({'status': 'success'})
+
+
+@app.route('/api/notifications/read-all', methods=['POST'])
+@login_required
+def api_mark_all_notifications_read():
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE notifications SET is_read = 1 WHERE user_id = ?",
+            (current_user.id,)
+        )
+        conn.commit()
+    return jsonify({'status': 'success'})
+
+
+@app.route('/notifications')
+@login_required
+def user_notifications():
+    with get_db() as conn:
+        notifications = conn.execute(
+            """
+            SELECT id, title, message, link, is_read, created_at
+            FROM notifications
+            WHERE user_id = ?
+            ORDER BY id DESC
+            """,
+            (current_user.id,)
+        ).fetchall()
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Notifications Inbox{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>Notifications Inbox</h1>
+                <p>System announcements, task alerts, and leave status updates.</p>
+            </div>
+            <button type="button" class="btn btn-outline-primary btn-sm" onclick="markAllNotificationsReadPage()">
+                <i class="bi bi-check-all me-1"></i>Mark All as Read
+            </button>
+        </div>
+
+        <div class="card shadow-sm border-0">
+            <div class="card-body p-0">
+                <div class="list-group list-group-flush" id="notifInboxList">
+                    {% for n in notifications %}
+                        <div class="list-group-item p-3 border-bottom d-flex align-items-start gap-3 {% if not n.is_read %}bg-primary bg-opacity-10{% endif %}">
+                            <div class="rounded-circle p-2 {% if not n.is_read %}bg-primary text-white{% else %}bg-secondary bg-opacity-10 text-secondary{% endif %}">
+                                <i class="bi bi-bell-fill fs-5"></i>
+                            </div>
+                            <div class="flex-grow-1">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <h6 class="mb-0 fw-bold">{{ n.title }}</h6>
+                                    <small class="text-muted">{{ n.created_at }}</small>
+                                </div>
+                                <p class="mb-1 text-secondary small">{{ n.message }}</p>
+                                {% if n.link %}
+                                    <a href="{{ n.link }}" class="btn btn-sm btn-link p-0 text-primary small text-decoration-none fw-semibold">View details <i class="bi bi-arrow-right"></i></a>
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% else %}
+                        <div class="text-center py-5 text-muted">
+                            <i class="bi bi-bell-slash fs-1 d-block mb-2 text-secondary opacity-50"></i>
+                            You have no notifications in your inbox.
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <script>
+            function markAllNotificationsReadPage() {
+                fetch('/api/notifications/read-all', { method: 'POST' })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            window.location.reload();
+                        }
+                    });
+            }
+        </script>
+        {% endblock %}
+        """,
+        notifications=notifications,
+    )
 
 
 if __name__ == "__main__":

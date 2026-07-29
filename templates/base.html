@@ -64,7 +64,25 @@
                     <i class="bi bi-search"></i><input type="search" placeholder="Search" aria-label="Search">
                 </form>
                 <div class="topbar-actions">
-                    <button class="icon-button" type="button" aria-label="Notifications" title="Notifications"><i class="bi bi-bell"></i><span class="notification-dot"></span></button>
+                    <div class="dropdown">
+                        <button class="icon-button position-relative" type="button" id="notifDropdownToggle" data-bs-toggle="dropdown" aria-expanded="false" title="Notifications">
+                            <i class="bi bi-bell"></i>
+                            <span class="notification-dot d-none" id="notifDot"></span>
+                            <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger d-none" id="notifBadge" style="font-size: 10px;">0</span>
+                        </button>
+                        <div class="dropdown-menu dropdown-menu-end shadow-lg p-0" aria-labelledby="notifDropdownToggle" style="width: 340px; max-height: 420px; overflow-y: auto;">
+                            <div class="p-3 bg-light border-bottom d-flex justify-content-between align-items-center">
+                                <h6 class="mb-0 fw-bold"><i class="bi bi-bell me-2 text-primary"></i>Notifications</h6>
+                                <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none small text-primary" onclick="markAllNotificationsRead(event)">Mark all read</button>
+                            </div>
+                            <div id="notifDropdownList" class="list-group list-group-flush">
+                                <div class="text-center py-4 text-muted small">Loading notifications...</div>
+                            </div>
+                            <div class="p-2 text-center bg-light border-top">
+                                <a href="{{ url_for('user_notifications') }}" class="small text-primary text-decoration-none fw-semibold">View All Notifications</a>
+                            </div>
+                        </div>
+                    </div>
                     <div class="user-menu"><span class="user-avatar">{{ current_user.username[:1]|upper }}</span><span class="user-details"><strong>{{ current_user.username }}</strong><small>{{ current_user.role|title }}</small></span></div>
                     <a class="logout-link" href="{{ url_for('logout') }}" title="Log out"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
                 </div>
