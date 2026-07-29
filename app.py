@@ -4697,6 +4697,1432 @@ def add_performance_review(user_id):
     )
 
 
+# Reports Module Routes
+
+@app.route('/reports')
+@login_required
+def reports_dashboard():
+    with get_db() as conn:
+        total_employees = conn.execute("SELECT COUNT(*) FROM employees").fetchone()[0]
+        total_attendance = conn.execute("SELECT COUNT(*) FROM attendance").fetchone()[0]
+        total_leaves = conn.execute("SELECT COUNT(*) FROM leave_requests").fetchone()[0]
+        avg_rating = conn.execute("SELECT COALESCE(AVG(overall_rating), 0) FROM performance_reviews").fetchone()[0]
+        total_projects = conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+        total_tasks = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}HRMS Reports & Analytics{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>Reports & Analytics Directory</h1>
+                <p>Access operational summaries, performance metrics, and organizational analytics.</p>
+            </div>
+            <button type="button" class="btn btn-outline-secondary btn-export" onclick="window.print()"><i class="bi bi-printer me-1"></i>Print / PDF</button>
+        </div>
+
+        <div class="row g-4 mb-4">
+            <div class="col-md-6 col-lg-4">
+                <div class="card shadow-sm h-100 border-0 border-start border-primary border-4">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="rounded-circle bg-primary bg-opacity-10 p-3 me-3 text-primary">
+                                <i class="bi bi-people fs-3"></i>
+                            </div>
+                            <div>
+                                <h5 class="card-title fw-bold mb-0">Employee Reports</h5>
+                                <span class="text-muted small">Headcount & Department Analytics</span>
+                            </div>
+                        </div>
+                        <div class="display-6 fw-bold text-dark mb-2">{{ total_employees }}</div>
+                        <p class="text-muted small mb-3">Total registered employees across departments.</p>
+                        <a class="btn btn-outline-primary btn-sm w-100" href="{{ url_for('reports_employees') }}">
+                            <i class="bi bi-arrow-right-circle me-1"></i>View Employee Report
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6 col-lg-4">
+                <div class="card shadow-sm h-100 border-0 border-start border-info border-4">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="rounded-circle bg-info bg-opacity-10 p-3 me-3 text-info">
+                                <i class="bi bi-calendar-check fs-3"></i>
+                            </div>
+                            <div>
+                                <h5 class="card-title fw-bold mb-0">Attendance Reports</h5>
+                                <span class="text-muted small">Logs & Work Hours Trends</span>
+                            </div>
+                        </div>
+                        <div class="display-6 fw-bold text-dark mb-2">{{ total_attendance }}</div>
+                        <p class="text-muted small mb-3">Total attendance records logged in system.</p>
+                        <a class="btn btn-outline-info btn-sm w-100" href="{{ url_for('reports_attendance') }}">
+                            <i class="bi bi-arrow-right-circle me-1"></i>View Attendance Report
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6 col-lg-4">
+                <div class="card shadow-sm h-100 border-0 border-start border-warning border-4">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="rounded-circle bg-warning bg-opacity-10 p-3 me-3 text-warning">
+                                <i class="bi bi-calendar-minus fs-3"></i>
+                            </div>
+                            <div>
+                                <h5 class="card-title fw-bold mb-0">Leave Reports</h5>
+                                <span class="text-muted small">Approval & Utilization Analytics</span>
+                            </div>
+                        </div>
+                        <div class="display-6 fw-bold text-dark mb-2">{{ total_leaves }}</div>
+                        <p class="text-muted small mb-3">Total submitted leave requests.</p>
+                        <a class="btn btn-outline-warning btn-sm text-dark w-100" href="{{ url_for('reports_leave') }}">
+                            <i class="bi bi-arrow-right-circle me-1"></i>View Leave Report
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6 col-lg-6">
+                <div class="card shadow-sm h-100 border-0 border-start border-success border-4">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="rounded-circle bg-success bg-opacity-10 p-3 me-3 text-success">
+                                <i class="bi bi-graph-up-arrow fs-3"></i>
+                            </div>
+                            <div>
+                                <h5 class="card-title fw-bold mb-0">Performance Reports</h5>
+                                <span class="text-muted small">Ratings & Competency Matrix</span>
+                            </div>
+                        </div>
+                        <div class="display-6 fw-bold text-dark mb-2">{{ '%.1f'|format(avg_rating) }} <span class="fs-4 text-warning">★</span></div>
+                        <p class="text-muted small mb-3">Company-wide performance average rating.</p>
+                        <a class="btn btn-outline-success btn-sm w-100" href="{{ url_for('reports_performance') }}">
+                            <i class="bi bi-arrow-right-circle me-1"></i>View Performance Report
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6 col-lg-6">
+                <div class="card shadow-sm h-100 border-0 border-start border-secondary border-4">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="rounded-circle bg-secondary bg-opacity-10 p-3 me-3 text-secondary">
+                                <i class="bi bi-kanban fs-3"></i>
+                            </div>
+                            <div>
+                                <h5 class="card-title fw-bold mb-0">Project & Task Reports</h5>
+                                <span class="text-muted small">Workload & Delivery Completion</span>
+                            </div>
+                        </div>
+                        <div class="display-6 fw-bold text-dark mb-2">{{ total_projects }} <span class="fs-6 text-muted">projects / {{ total_tasks }} tasks</span></div>
+                        <p class="text-muted small mb-3">Active projects and assigned task statistics.</p>
+                        <a class="btn btn-outline-secondary btn-sm w-100" href="{{ url_for('reports_projects') }}">
+                            <i class="bi bi-arrow-right-circle me-1"></i>View Project Report
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endblock %}
+        """,
+        total_employees=total_employees,
+        total_attendance=total_attendance,
+        total_leaves=total_leaves,
+        avg_rating=avg_rating,
+        total_projects=total_projects,
+        total_tasks=total_tasks,
+    )
+
+
+@app.route('/reports/employees')
+@login_required
+def reports_employees():
+    selected_dept = request.args.get('dept', '').strip()
+
+    with get_db() as conn:
+        emp_rows = conn.execute("SELECT id, user_id, name, department, salary FROM employees").fetchall()
+        user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+
+    total_emp = len(emp_rows)
+    linked_user_count = sum(1 for e in emp_rows if e['user_id'] is not None)
+    unlinked_count = total_emp - linked_user_count
+    salaries = [e['salary'] for e in emp_rows if e['salary'] is not None]
+    avg_salary = sum(salaries) / len(salaries) if salaries else 0.0
+
+    dept_counts = {}
+    dept_salaries = {}
+    for e in emp_rows:
+        depts = [d.strip() for d in (e['department'] or 'Unassigned').split(',') if d.strip()]
+        if not depts:
+            depts = ['Unassigned']
+        for d in depts:
+            dept_counts[d] = dept_counts.get(d, 0) + 1
+            if d not in dept_salaries:
+                dept_salaries[d] = []
+            if e['salary']:
+                dept_salaries[d].append(e['salary'])
+
+    all_dept_labels = sorted(list(dept_counts.keys()))
+    dept_labels = all_dept_labels
+    dept_values = [dept_counts[d] for d in dept_labels]
+
+    dept_summary = []
+    for d in all_dept_labels:
+        if selected_dept and selected_dept != d:
+            continue
+        s_list = dept_salaries.get(d, [])
+        d_avg_sal = sum(s_list) / len(s_list) if s_list else 0.0
+        dept_summary.append({
+            'department': d,
+            'count': dept_counts[d],
+            'avg_salary': d_avg_sal
+        })
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Employee Analytics Report{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>Employee Analytics Report</h1>
+                <p>Headcount breakdown, department distribution, and active user account metrics.</p>
+            </div>
+            <div class="d-flex gap-2">
+                <button type="button" class="btn btn-outline-secondary btn-export" onclick="window.print()"><i class="bi bi-printer me-1"></i>Print / PDF</button>
+                <button type="button" class="btn btn-outline-success btn-export" onclick="exportTableToCSV('empReportTable', 'employee_analytics_report.csv')"><i class="bi bi-file-earmark-spreadsheet me-1"></i>Export CSV</button>
+                <a class="btn btn-outline-primary" href="{{ url_for('reports_dashboard') }}"><i class="bi bi-arrow-left me-1"></i>Back to Hub</a>
+            </div>
+        </div>
+
+        <div class="card shadow-sm border-0 mb-4 report-filter-bar">
+            <div class="card-body py-3">
+                <form method="GET" action="{{ url_for('reports_employees') }}" class="row g-3 align-items-center">
+                    <div class="col-md-4">
+                        <label class="form-label small text-muted mb-1 fw-bold">Filter by Department</label>
+                        <select name="dept" class="form-select form-select-sm" onchange="this.form.submit()">
+                            <option value="">All Departments</option>
+                            {% for d in all_dept_labels %}
+                                <option value="{{ d }}" {% if selected_dept == d %}selected{% endif %}>{{ d }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    {% if selected_dept %}
+                        <div class="col-md-2 mt-4">
+                            <a href="{{ url_for('reports_employees') }}" class="btn btn-sm btn-link text-decoration-none"><i class="bi bi-x-circle me-1"></i>Clear Filter</a>
+                        </div>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+
+        <div class="row g-4 mb-4">
+            <div class="col-md-3">
+                <div class="card shadow-sm border-0 border-start border-primary border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">Total Employees</div>
+                        <div class="display-6 fw-bold text-dark my-1">{{ total_emp }}</div>
+                        <span class="text-muted small">Registered HR profiles</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card shadow-sm border-0 border-start border-success border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">Active Login Users</div>
+                        <div class="display-6 fw-bold text-dark my-1">{{ user_count }}</div>
+                        <span class="text-muted small">Authentication accounts</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card shadow-sm border-0 border-start border-info border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">Departments</div>
+                        <div class="display-6 fw-bold text-dark my-1">{{ all_dept_labels|length }}</div>
+                        <span class="text-muted small">Active department teams</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card shadow-sm border-0 border-start border-warning border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">Average Salary</div>
+                        <div class="display-6 fw-bold text-dark my-1">${{ '%.0f'|format(avg_salary) }}</div>
+                        <span class="text-muted small">Average compensation</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row g-4 mb-4">
+            <div class="col-lg-8">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white py-3 border-0">
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-bar-chart-fill me-2 text-primary"></i>Department Headcount Distribution</h5>
+                    </div>
+                    <div class="card-body">
+                        <div style="height: 250px; position: relative;">
+                            <canvas id="deptChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-4">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white py-3 border-0">
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-pie-chart-fill me-2 text-primary"></i>User Account Link Status</h5>
+                    </div>
+                    <div class="card-body text-center d-flex flex-column justify-content-center">
+                        <div style="height: 200px; position: relative;" class="mx-auto">
+                            <canvas id="accountChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-table me-2 text-primary"></i>Department Analytics Breakdown</h5>
+                <button type="button" class="btn btn-sm btn-outline-success" onclick="exportTableToCSV('empReportTable', 'department_breakdown.csv')"><i class="bi bi-download me-1"></i>CSV</button>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0" id="empReportTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Department</th>
+                                <th>Employee Headcount</th>
+                                <th>Average Salary</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for d in dept_summary %}
+                                <tr>
+                                    <td class="fw-bold"><i class="bi bi-building me-2 text-primary"></i>{{ d.department }}</td>
+                                    <td><span class="badge bg-primary fs-6">{{ d.count }}</span></td>
+                                    <td>${{ '%.2f'|format(d.avg_salary) }}</td>
+                                </tr>
+                            {% else %}
+                                <tr><td colspan="3" class="text-center py-4 text-muted">No department records matching filter.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script>
+            function exportTableToCSV(tableId, filename) {
+                var table = document.getElementById(tableId);
+                if (!table) return;
+                var rows = table.querySelectorAll("tr");
+                var csv = [];
+                for (var i = 0; i < rows.length; i++) {
+                    var row = [], cols = rows[i].querySelectorAll("td, th");
+                    for (var j = 0; j < cols.length; j++) {
+                        var text = cols[j].innerText.replace(/(\\r\\n|\\n|\\r)/gm, " ").replace(/"/g, '""').trim();
+                        row.push('"' + text + '"');
+                    }
+                    csv.push(row.join(","));
+                }
+                var csvFile = new Blob([csv.join("\\n")], {type: "text/csv"});
+                var downloadLink = document.createElement("a");
+                downloadLink.download = filename;
+                downloadLink.href = window.URL.createObjectURL(csvFile);
+                downloadLink.style.display = "none";
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
+            }
+
+            document.addEventListener('DOMContentLoaded', function() {
+                const ctxDept = document.getElementById('deptChart').getContext('2d');
+                new Chart(ctxDept, {
+                    type: 'bar',
+                    data: {
+                        labels: {{ dept_labels|tojson }},
+                        datasets: [{
+                            label: 'Headcount',
+                            data: {{ dept_values|tojson }},
+                            backgroundColor: '#4f46e5',
+                            borderRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+                    }
+                });
+
+                const ctxAcc = document.getElementById('accountChart').getContext('2d');
+                new Chart(ctxAcc, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Linked Account', 'Unlinked Profile'],
+                        datasets: [{
+                            data: [{{ linked_user_count }}, {{ unlinked_count }}],
+                            backgroundColor: ['#22c55e', '#cbd5e1']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false
+                    }
+                });
+            });
+        </script>
+        {% endblock %}
+        """,
+        total_emp=total_emp,
+        user_count=user_count,
+        avg_salary=avg_salary,
+        linked_user_count=linked_user_count,
+        unlinked_count=unlinked_count,
+        dept_labels=dept_labels,
+        dept_values=dept_values,
+        all_dept_labels=all_dept_labels,
+        selected_dept=selected_dept,
+        dept_summary=dept_summary,
+    )
+
+
+@app.route('/reports/attendance')
+@login_required
+def reports_attendance():
+    start_date = request.args.get('start_date', '').strip()
+    end_date = request.args.get('end_date', '').strip()
+
+    query_where = []
+    params = []
+    if start_date:
+        query_where.append("date >= ?")
+        params.append(start_date)
+    if end_date:
+        query_where.append("date <= ?")
+        params.append(end_date)
+
+    where_clause = (" WHERE " + " AND ".join(query_where)) if query_where else ""
+
+    with get_db() as conn:
+        total_logs = conn.execute("SELECT COUNT(*) FROM attendance" + where_clause, params).fetchone()[0]
+        total_hours = conn.execute("SELECT COALESCE(SUM(total_hours), 0) FROM attendance" + where_clause, params).fetchone()[0]
+        avg_hours = conn.execute("SELECT COALESCE(AVG(total_hours), 0) FROM attendance WHERE total_hours IS NOT NULL" + ((" AND " + " AND ".join(query_where)) if query_where else ""), params).fetchone()[0]
+
+        trend_rows = conn.execute(
+            "SELECT date, COUNT(*) AS count, COALESCE(SUM(total_hours), 0) AS total_hrs FROM attendance" + where_clause + " GROUP BY date ORDER BY date ASC LIMIT 15",
+            params
+        ).fetchall()
+
+        top_employee_rows = conn.execute(
+            "SELECT username, COALESCE(SUM(total_hours), 0) AS total_hrs, COUNT(*) AS log_count FROM attendance" + where_clause + " GROUP BY username ORDER BY total_hrs DESC LIMIT 8",
+            params
+        ).fetchall()
+
+    trend_dates = [r['date'] for r in trend_rows]
+    trend_hours = [round(r['total_hrs'], 2) for r in trend_rows]
+
+    emp_names = [r['username'] for r in top_employee_rows]
+    emp_hours = [round(r['total_hrs'], 2) for r in top_employee_rows]
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Attendance Analytics Report{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>Attendance Analytics Report</h1>
+                <p>System work hours trends, punch log statistics, and top contributor rankings.</p>
+            </div>
+            <div class="d-flex gap-2">
+                <button type="button" class="btn btn-outline-secondary btn-export" onclick="window.print()"><i class="bi bi-printer me-1"></i>Print / PDF</button>
+                <button type="button" class="btn btn-outline-success btn-export" onclick="exportTableToCSV('attendanceReportTable', 'attendance_analytics_report.csv')"><i class="bi bi-file-earmark-spreadsheet me-1"></i>Export CSV</button>
+                <a class="btn btn-outline-primary" href="{{ url_for('reports_dashboard') }}"><i class="bi bi-arrow-left me-1"></i>Back to Hub</a>
+            </div>
+        </div>
+
+        <div class="card shadow-sm border-0 mb-4 report-filter-bar">
+            <div class="card-body py-3">
+                <form method="GET" action="{{ url_for('reports_attendance') }}" class="row g-3 align-items-end">
+                    <div class="col-md-4">
+                        <label class="form-label small text-muted mb-1 fw-bold">Start Date</label>
+                        <input type="date" name="start_date" class="form-control form-control-sm" value="{{ start_date }}">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small text-muted mb-1 fw-bold">End Date</label>
+                        <input type="date" name="end_date" class="form-control form-control-sm" value="{{ end_date }}">
+                    </div>
+                    <div class="col-md-4 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-funnel me-1"></i>Filter</button>
+                        {% if start_date or end_date %}
+                            <a href="{{ url_for('reports_attendance') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-x-circle me-1"></i>Reset</a>
+                        {% endif %}
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="row g-4 mb-4">
+            <div class="col-md-4">
+                <div class="card shadow-sm border-0 border-start border-info border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">Total Attendance Logs</div>
+                        <div class="display-6 fw-bold text-dark my-1">{{ total_logs }}</div>
+                        <span class="text-muted small">Recorded punch sessions</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card shadow-sm border-0 border-start border-success border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">Total Hours Logged</div>
+                        <div class="display-6 fw-bold text-dark my-1">{{ '%.1f'|format(total_hours) }} hrs</div>
+                        <span class="text-muted small">Cumulative work time</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card shadow-sm border-0 border-start border-primary border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">Average Session Duration</div>
+                        <div class="display-6 fw-bold text-dark my-1">{{ '%.1f'|format(avg_hours) }} hrs</div>
+                        <span class="text-muted small">Average shift length</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row g-4 mb-4">
+            <div class="col-lg-7">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white py-3 border-0">
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-graph-up me-2 text-primary"></i>Daily Work Hours Trend</h5>
+                    </div>
+                    <div class="card-body">
+                        <div style="height: 250px; position: relative;">
+                            <canvas id="attendanceTrendChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-5">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-trophy-fill me-2 text-primary"></i>Top Contributor Hours</h5>
+                        <button type="button" class="btn btn-sm btn-outline-success" onclick="exportTableToCSV('attendanceReportTable', 'top_attendance_contributors.csv')"><i class="bi bi-download me-1"></i>CSV</button>
+                    </div>
+                    <div class="card-body">
+                        <div style="height: 250px; position: relative;">
+                            <canvas id="topHoursChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-table me-2 text-primary"></i>Employee Attendance Hours Directory</h5>
+                <button type="button" class="btn btn-sm btn-outline-success" onclick="exportTableToCSV('attendanceReportTable', 'attendance_hours_summary.csv')"><i class="bi bi-download me-1"></i>CSV</button>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0" id="attendanceReportTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Employee / Username</th>
+                                <th>Total Logged Hours</th>
+                                <th>Total Punch Sessions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for r in top_employee_rows %}
+                                <tr>
+                                    <td class="fw-bold"><i class="bi bi-person-circle me-2 text-primary"></i>{{ r.username }}</td>
+                                    <td><span class="badge bg-success fs-6">{{ '%.2f'|format(r.total_hrs) }} hrs</span></td>
+                                    <td><span class="badge bg-light text-dark border">{{ r.log_count }} sessions</span></td>
+                                </tr>
+                            {% else %}
+                                <tr><td colspan="3" class="text-center py-4 text-muted">No attendance logs matching filter dates.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script>
+            function exportTableToCSV(tableId, filename) {
+                var table = document.getElementById(tableId);
+                if (!table) return;
+                var rows = table.querySelectorAll("tr");
+                var csv = [];
+                for (var i = 0; i < rows.length; i++) {
+                    var row = [], cols = rows[i].querySelectorAll("td, th");
+                    for (var j = 0; j < cols.length; j++) {
+                        var text = cols[j].innerText.replace(/(\\r\\n|\\n|\\r)/gm, " ").replace(/"/g, '""').trim();
+                        row.push('"' + text + '"');
+                    }
+                    csv.push(row.join(","));
+                }
+                var csvFile = new Blob([csv.join("\\n")], {type: "text/csv"});
+                var downloadLink = document.createElement("a");
+                downloadLink.download = filename;
+                downloadLink.href = window.URL.createObjectURL(csvFile);
+                downloadLink.style.display = "none";
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
+            }
+
+            document.addEventListener('DOMContentLoaded', function() {
+                const ctxTrend = document.getElementById('attendanceTrendChart').getContext('2d');
+                new Chart(ctxTrend, {
+                    type: 'line',
+                    data: {
+                        labels: {{ trend_dates|tojson }},
+                        datasets: [{
+                            label: 'Total Hours',
+                            data: {{ trend_hours|tojson }},
+                            borderColor: '#0284c7',
+                            backgroundColor: 'rgba(2, 132, 199, 0.1)',
+                            fill: true,
+                            tension: 0.3
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: { y: { beginAtZero: true } }
+                    }
+                });
+
+                const ctxTop = document.getElementById('topHoursChart').getContext('2d');
+                new Chart(ctxTop, {
+                    type: 'bar',
+                    data: {
+                        labels: {{ emp_names|tojson }},
+                        datasets: [{
+                            label: 'Hours',
+                            data: {{ emp_hours|tojson }},
+                            backgroundColor: '#22c55e',
+                            borderRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: { y: { beginAtZero: true } }
+                    }
+                });
+            });
+        </script>
+        {% endblock %}
+        """,
+        total_logs=total_logs,
+        total_hours=total_hours,
+        avg_hours=avg_hours,
+        trend_dates=trend_dates,
+        trend_hours=trend_hours,
+        emp_names=emp_names,
+        emp_hours=emp_hours,
+        start_date=start_date,
+        end_date=end_date,
+        top_employee_rows=top_employee_rows,
+    )
+
+
+@app.route('/reports/leave')
+@login_required
+def reports_leave():
+    selected_status = request.args.get('status', '').strip()
+    selected_type = request.args.get('leave_type', '').strip()
+
+    query_where = []
+    params = []
+    if selected_status:
+        query_where.append("status = ?")
+        params.append(selected_status)
+    if selected_type:
+        query_where.append("leave_type = ?")
+        params.append(selected_type)
+
+    where_clause = (" WHERE " + " AND ".join(query_where)) if query_where else ""
+
+    with get_db() as conn:
+        total_leaves = conn.execute("SELECT COUNT(*) FROM leave_requests").fetchone()[0]
+        approved_count = conn.execute("SELECT COUNT(*) FROM leave_requests WHERE status = 'Approved'").fetchone()[0]
+        pending_count = conn.execute("SELECT COUNT(*) FROM leave_requests WHERE status = 'Pending'").fetchone()[0]
+        rejected_count = conn.execute("SELECT COUNT(*) FROM leave_requests WHERE status = 'Rejected'").fetchone()[0]
+
+        type_rows = conn.execute(
+            "SELECT leave_type, COUNT(*) AS count, COALESCE(SUM(total_days), 0) AS total_days FROM leave_requests GROUP BY leave_type ORDER BY count DESC"
+        ).fetchall()
+
+        all_types = [r['leave_type'] for r in type_rows]
+
+        recent_leaves = conn.execute("SELECT * FROM leave_requests" + where_clause + " ORDER BY applied_date DESC LIMIT 15", params).fetchall()
+
+    type_labels = [r['leave_type'] for r in type_rows]
+    type_counts = [r['count'] for r in type_rows]
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Leave Analytics Report{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>Leave Analytics Report</h1>
+                <p>Approval status breakdown, leave type distribution, and recent application log.</p>
+            </div>
+            <div class="d-flex gap-2">
+                <button type="button" class="btn btn-outline-secondary btn-export" onclick="window.print()"><i class="bi bi-printer me-1"></i>Print / PDF</button>
+                <button type="button" class="btn btn-outline-success btn-export" onclick="exportTableToCSV('leaveReportTable', 'leave_analytics_report.csv')"><i class="bi bi-file-earmark-spreadsheet me-1"></i>Export CSV</button>
+                <a class="btn btn-outline-primary" href="{{ url_for('reports_dashboard') }}"><i class="bi bi-arrow-left me-1"></i>Back to Hub</a>
+            </div>
+        </div>
+
+        <div class="card shadow-sm border-0 mb-4 report-filter-bar">
+            <div class="card-body py-3">
+                <form method="GET" action="{{ url_for('reports_leave') }}" class="row g-3 align-items-end">
+                    <div class="col-md-4">
+                        <label class="form-label small text-muted mb-1 fw-bold">Filter by Status</label>
+                        <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+                            <option value="">All Statuses</option>
+                            <option value="Approved" {% if selected_status == 'Approved' %}selected{% endif %}>Approved</option>
+                            <option value="Pending" {% if selected_status == 'Pending' %}selected{% endif %}>Pending</option>
+                            <option value="Rejected" {% if selected_status == 'Rejected' %}selected{% endif %}>Rejected</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small text-muted mb-1 fw-bold">Filter by Leave Type</label>
+                        <select name="leave_type" class="form-select form-select-sm" onchange="this.form.submit()">
+                            <option value="">All Leave Types</option>
+                            {% for t in all_types %}
+                                <option value="{{ t }}" {% if selected_type == t %}selected{% endif %}>{{ t }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    {% if selected_status or selected_type %}
+                        <div class="col-md-2">
+                            <a href="{{ url_for('reports_leave') }}" class="btn btn-sm btn-link text-decoration-none"><i class="bi bi-x-circle me-1"></i>Clear Filters</a>
+                        </div>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+
+        <div class="row g-4 mb-4">
+            <div class="col-md-3">
+                <div class="card shadow-sm border-0 border-start border-primary border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">Total Requests</div>
+                        <div class="display-6 fw-bold text-dark my-1">{{ total_leaves }}</div>
+                        <span class="text-muted small">Submitted leave forms</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card shadow-sm border-0 border-start border-success border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">Approved Leaves</div>
+                        <div class="display-6 fw-bold text-success my-1">{{ approved_count }}</div>
+                        <span class="text-muted small">Authorized absences</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card shadow-sm border-0 border-start border-warning border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">Pending Approvals</div>
+                        <div class="display-6 fw-bold text-warning my-1">{{ pending_count }}</div>
+                        <span class="text-muted small">Awaiting review</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card shadow-sm border-0 border-start border-danger border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">Rejected Requests</div>
+                        <div class="display-6 fw-bold text-danger my-1">{{ rejected_count }}</div>
+                        <span class="text-muted small">Declined applications</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row g-4 mb-4">
+            <div class="col-lg-5">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white py-3 border-0">
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-pie-chart-fill me-2 text-primary"></i>Approval Status Breakdown</h5>
+                    </div>
+                    <div class="card-body text-center d-flex flex-column justify-content-center">
+                        <div style="height: 220px; position: relative;" class="mx-auto">
+                            <canvas id="leaveStatusChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-7">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white py-3 border-0">
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-bar-chart-fill me-2 text-primary"></i>Leave Type Distribution</h5>
+                    </div>
+                    <div class="card-body">
+                        <div style="height: 220px; position: relative;">
+                            <canvas id="leaveTypeChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-list-task me-2 text-primary"></i>Leave Applications Summary Directory</h5>
+                <button type="button" class="btn btn-sm btn-outline-success" onclick="exportTableToCSV('leaveReportTable', 'leave_applications_summary.csv')"><i class="bi bi-download me-1"></i>CSV</button>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0" id="leaveReportTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Employee</th>
+                                <th>Leave Type</th>
+                                <th>Dates</th>
+                                <th>Days</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for l in recent_leaves %}
+                                <tr>
+                                    <td class="fw-bold">{{ l.employee_name }}</td>
+                                    <td><span class="badge bg-light text-dark border">{{ l.leave_type }}</span></td>
+                                    <td class="small">{{ l.start_date }} to {{ l.end_date }}</td>
+                                    <td>{{ l.total_days }}</td>
+                                    <td>
+                                        {% if l.status == 'Approved' %}
+                                            <span class="badge bg-success">Approved</span>
+                                        {% elif l.status == 'Pending' %}
+                                            <span class="badge bg-warning text-dark">Pending</span>
+                                        {% else %}
+                                            <span class="badge bg-danger">Rejected</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% else %}
+                                <tr><td colspan="5" class="text-center py-4 text-muted">No leave request logs matching filters.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script>
+            function exportTableToCSV(tableId, filename) {
+                var table = document.getElementById(tableId);
+                if (!table) return;
+                var rows = table.querySelectorAll("tr");
+                var csv = [];
+                for (var i = 0; i < rows.length; i++) {
+                    var row = [], cols = rows[i].querySelectorAll("td, th");
+                    for (var j = 0; j < cols.length; j++) {
+                        var text = cols[j].innerText.replace(/(\\r\\n|\\n|\\r)/gm, " ").replace(/"/g, '""').trim();
+                        row.push('"' + text + '"');
+                    }
+                    csv.push(row.join(","));
+                }
+                var csvFile = new Blob([csv.join("\\n")], {type: "text/csv"});
+                var downloadLink = document.createElement("a");
+                downloadLink.download = filename;
+                downloadLink.href = window.URL.createObjectURL(csvFile);
+                downloadLink.style.display = "none";
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
+            }
+
+            document.addEventListener('DOMContentLoaded', function() {
+                const ctxStatus = document.getElementById('leaveStatusChart').getContext('2d');
+                new Chart(ctxStatus, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Approved', 'Pending', 'Rejected'],
+                        datasets: [{
+                            data: [{{ approved_count }}, {{ pending_count }}, {{ rejected_count }}],
+                            backgroundColor: ['#22c55e', '#f59e0b', '#ef4444']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false
+                    }
+                });
+
+                const ctxType = document.getElementById('leaveTypeChart').getContext('2d');
+                new Chart(ctxType, {
+                    type: 'bar',
+                    data: {
+                        labels: {{ type_labels|tojson }},
+                        datasets: [{
+                            label: 'Requests Count',
+                            data: {{ type_counts|tojson }},
+                            backgroundColor: '#4f46e5',
+                            borderRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+                    }
+                });
+            });
+        </script>
+        {% endblock %}
+        """,
+        total_leaves=total_leaves,
+        approved_count=approved_count,
+        pending_count=pending_count,
+        rejected_count=rejected_count,
+        type_labels=type_labels,
+        type_counts=type_counts,
+        all_types=all_types,
+        selected_status=selected_status,
+        selected_type=selected_type,
+        recent_leaves=recent_leaves,
+    )
+
+
+@app.route('/reports/performance')
+@login_required
+def reports_performance():
+    min_rating = request.args.get('min_rating', '').strip()
+    min_val = float(min_rating) if min_rating else 0.0
+
+    with get_db() as conn:
+        total_evaluations = conn.execute("SELECT COUNT(*) FROM performance_reviews").fetchone()[0]
+        avg_rating = conn.execute("SELECT COALESCE(AVG(overall_rating), 0) FROM performance_reviews").fetchone()[0]
+        high_performers = conn.execute("SELECT COUNT(DISTINCT employee_user_id) FROM performance_reviews WHERE overall_rating >= 4.5").fetchone()[0]
+
+        avg_tech = conn.execute("SELECT COALESCE(AVG(technical_skills_score), 0) FROM performance_reviews").fetchone()[0]
+        avg_comm = conn.execute("SELECT COALESCE(AVG(communication_score), 0) FROM performance_reviews").fetchone()[0]
+        avg_prod = conn.execute("SELECT COALESCE(AVG(productivity_score), 0) FROM performance_reviews").fetchone()[0]
+        avg_team = conn.execute("SELECT COALESCE(AVG(teamwork_score), 0) FROM performance_reviews").fetchone()[0]
+
+        top_performers = conn.execute(
+            """
+            SELECT employee_name, AVG(overall_rating) AS avg_score, COUNT(*) AS review_count, MAX(created_at) AS last_review
+            FROM performance_reviews
+            GROUP BY employee_name
+            HAVING avg_score >= ?
+            ORDER BY avg_score DESC
+            LIMIT 10
+            """,
+            (min_val,)
+        ).fetchall()
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Performance Analytics Report{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>Performance Analytics Report</h1>
+                <p>Company-wide skill averages, rating metrics, and top performer directory.</p>
+            </div>
+            <div class="d-flex gap-2">
+                <button type="button" class="btn btn-outline-secondary btn-export" onclick="window.print()"><i class="bi bi-printer me-1"></i>Print / PDF</button>
+                <button type="button" class="btn btn-outline-success btn-export" onclick="exportTableToCSV('perfReportTable', 'performance_analytics_report.csv')"><i class="bi bi-file-earmark-spreadsheet me-1"></i>Export CSV</button>
+                <a class="btn btn-outline-primary" href="{{ url_for('reports_dashboard') }}"><i class="bi bi-arrow-left me-1"></i>Back to Hub</a>
+            </div>
+        </div>
+
+        <div class="card shadow-sm border-0 mb-4 report-filter-bar">
+            <div class="card-body py-3">
+                <form method="GET" action="{{ url_for('reports_performance') }}" class="row g-3 align-items-center">
+                    <div class="col-md-4">
+                        <label class="form-label small text-muted mb-1 fw-bold">Filter Leaderboard by Rating</label>
+                        <select name="min_rating" class="form-select form-select-sm" onchange="this.form.submit()">
+                            <option value="">All Ratings</option>
+                            <option value="4.5" {% if min_rating == '4.5' %}selected{% endif %}>4.5+ (High Performers)</option>
+                            <option value="4.0" {% if min_rating == '4.0' %}selected{% endif %}>4.0+ (Good Performers)</option>
+                            <option value="3.5" {% if min_rating == '3.5' %}selected{% endif %}>3.5+ (Average)</option>
+                        </select>
+                    </div>
+                    {% if min_rating %}
+                        <div class="col-md-2 mt-4">
+                            <a href="{{ url_for('reports_performance') }}" class="btn btn-sm btn-link text-decoration-none"><i class="bi bi-x-circle me-1"></i>Clear Filter</a>
+                        </div>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+
+        <div class="row g-4 mb-4">
+            <div class="col-md-4">
+                <div class="card shadow-sm border-0 border-start border-success border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">Company Average Rating</div>
+                        <div class="display-6 fw-bold text-success my-1">{{ '%.1f'|format(avg_rating) }} <span class="fs-4 text-warning">★</span></div>
+                        <span class="text-muted small">Overall score mean</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card shadow-sm border-0 border-start border-primary border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">Total Evaluations Logged</div>
+                        <div class="display-6 fw-bold text-dark my-1">{{ total_evaluations }}</div>
+                        <span class="text-muted small">Completed review forms</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card shadow-sm border-0 border-start border-warning border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">High Performers (4.5+)</div>
+                        <div class="display-6 fw-bold text-dark my-1">{{ high_performers }}</div>
+                        <span class="text-muted small">Top rating tier count</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row g-4 mb-4">
+            <div class="col-lg-6">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white py-3 border-0">
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-radar me-2 text-primary"></i>Company Skill Competency Radar</h5>
+                    </div>
+                    <div class="card-body">
+                        <div style="height: 240px; position: relative;">
+                            <canvas id="companyRadarChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-6">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white py-3 border-0">
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-award me-2 text-primary"></i>Skill Scores Summary</h5>
+                    </div>
+                    <div class="card-body d-flex flex-column justify-content-center gap-3">
+                        <div>
+                            <div class="d-flex justify-content-between mb-1"><span class="fw-semibold small">Technical Skills</span><span class="fw-bold small">{{ '%.1f'|format(avg_tech) }} / 5.0</span></div>
+                            <div class="progress" style="height: 8px;"><div class="progress-bar bg-primary" style="width: {{ (avg_tech / 5.0) * 100 }}%;"></div></div>
+                        </div>
+                        <div>
+                            <div class="d-flex justify-content-between mb-1"><span class="fw-semibold small">Communication</span><span class="fw-bold small">{{ '%.1f'|format(avg_comm) }} / 5.0</span></div>
+                            <div class="progress" style="height: 8px;"><div class="progress-bar bg-info" style="width: {{ (avg_comm / 5.0) * 100 }}%;"></div></div>
+                        </div>
+                        <div>
+                            <div class="d-flex justify-content-between mb-1"><span class="fw-semibold small">Productivity</span><span class="fw-bold small">{{ '%.1f'|format(avg_prod) }} / 5.0</span></div>
+                            <div class="progress" style="height: 8px;"><div class="progress-bar bg-success" style="width: {{ (avg_prod / 5.0) * 100 }}%;"></div></div>
+                        </div>
+                        <div>
+                            <div class="d-flex justify-content-between mb-1"><span class="fw-semibold small">Teamwork</span><span class="fw-bold small">{{ '%.1f'|format(avg_team) }} / 5.0</span></div>
+                            <div class="progress" style="height: 8px;"><div class="progress-bar bg-warning" style="width: {{ (avg_team / 5.0) * 100 }}%;"></div></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-trophy me-2 text-primary"></i>Top Performer Leaderboard</h5>
+                <button type="button" class="btn btn-sm btn-outline-success" onclick="exportTableToCSV('perfReportTable', 'top_performers_leaderboard.csv')"><i class="bi bi-download me-1"></i>CSV</button>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0" id="perfReportTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Employee</th>
+                                <th>Average Score</th>
+                                <th>Total Evaluations</th>
+                                <th>Last Review Date</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for p in top_performers %}
+                                <tr>
+                                    <td class="fw-bold"><i class="bi bi-person-circle me-2 text-primary"></i>{{ p.employee_name }}</td>
+                                    <td><span class="badge bg-success fs-6">{{ '%.1f'|format(p.avg_score) }} ★</span></td>
+                                    <td><span class="badge bg-light text-dark border">{{ p.review_count }} review{% if p.review_count != 1 %}s{% endif %}</span></td>
+                                    <td class="text-muted small">{{ p.last_review }}</td>
+                                </tr>
+                            {% else %}
+                                <tr><td colspan="4" class="text-center py-4 text-muted">No performance review records matching filter.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script>
+            function exportTableToCSV(tableId, filename) {
+                var table = document.getElementById(tableId);
+                if (!table) return;
+                var rows = table.querySelectorAll("tr");
+                var csv = [];
+                for (var i = 0; i < rows.length; i++) {
+                    var row = [], cols = rows[i].querySelectorAll("td, th");
+                    for (var j = 0; j < cols.length; j++) {
+                        var text = cols[j].innerText.replace(/(\\r\\n|\\n|\\r)/gm, " ").replace(/"/g, '""').trim();
+                        row.push('"' + text + '"');
+                    }
+                    csv.push(row.join(","));
+                }
+                var csvFile = new Blob([csv.join("\\n")], {type: "text/csv"});
+                var downloadLink = document.createElement("a");
+                downloadLink.download = filename;
+                downloadLink.href = window.URL.createObjectURL(csvFile);
+                downloadLink.style.display = "none";
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
+            }
+
+            document.addEventListener('DOMContentLoaded', function() {
+                const ctxRadar = document.getElementById('companyRadarChart').getContext('2d');
+                new Chart(ctxRadar, {
+                    type: 'radar',
+                    data: {
+                        labels: ['Technical', 'Communication', 'Productivity', 'Teamwork'],
+                        datasets: [{
+                            label: 'Company Average',
+                            data: [{{ avg_tech }}, {{ avg_comm }}, {{ avg_prod }}, {{ avg_team }}],
+                            backgroundColor: 'rgba(34, 197, 94, 0.2)',
+                            borderColor: '#22c55e',
+                            pointBackgroundColor: '#22c55e'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: { r: { suggestedMin: 0, suggestedMax: 5 } }
+                    }
+                });
+            });
+        </script>
+        {% endblock %}
+        """,
+        total_evaluations=total_evaluations,
+        avg_rating=avg_rating,
+        high_performers=high_performers,
+        avg_tech=avg_tech,
+        avg_comm=avg_comm,
+        avg_prod=avg_prod,
+        avg_team=avg_team,
+        top_performers=top_performers,
+        min_rating=min_rating,
+    )
+
+
+@app.route('/reports/projects')
+@login_required
+def reports_projects():
+    selected_status = request.args.get('status', '').strip()
+
+    task_where = []
+    task_params = []
+    if selected_status:
+        task_where.append("status = ?")
+        task_params.append(selected_status)
+
+    where_clause = (" WHERE " + " AND ".join(task_where)) if task_where else ""
+
+    with get_db() as conn:
+        total_projects = conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+        total_tasks = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        completed_tasks = conn.execute("SELECT COUNT(*) FROM tasks WHERE status = 'Completed'").fetchone()[0]
+        completion_rate = (completed_tasks / total_tasks * 100) if total_tasks > 0 else 0.0
+        total_logged_hours = conn.execute("SELECT COALESCE(SUM(hours_worked), 0) FROM time_logs").fetchone()[0]
+
+        status_rows = conn.execute("SELECT status, COUNT(*) AS count FROM tasks GROUP BY status").fetchall()
+        status_dict = {r['status']: r['count'] for r in status_rows}
+
+        workload_rows = conn.execute(
+            """
+            SELECT assigned_to, COUNT(*) AS total_tasks,
+                   SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) AS completed_tasks,
+                   SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) AS pending_tasks
+            FROM tasks
+            """
+            + where_clause +
+            """
+            AND assigned_to IS NOT NULL AND assigned_to != ''
+            GROUP BY assigned_to
+            ORDER BY total_tasks DESC
+            LIMIT 10
+            """ if where_clause else
+            """
+            SELECT assigned_to, COUNT(*) AS total_tasks,
+                   SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) AS completed_tasks,
+                   SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) AS pending_tasks
+            FROM tasks
+            WHERE assigned_to IS NOT NULL AND assigned_to != ''
+            GROUP BY assigned_to
+            ORDER BY total_tasks DESC
+            LIMIT 10
+            """,
+            task_params
+        ).fetchall()
+
+    workload_names = [r['assigned_to'] for r in workload_rows]
+    workload_tasks = [r['total_tasks'] for r in workload_rows]
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Project & Task Analytics Report{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>Project & Task Analytics Report</h1>
+                <p>Task completion statistics, project delivery summary, and employee workload overview.</p>
+            </div>
+            <div class="d-flex gap-2">
+                <button type="button" class="btn btn-outline-secondary btn-export" onclick="window.print()"><i class="bi bi-printer me-1"></i>Print / PDF</button>
+                <button type="button" class="btn btn-outline-success btn-export" onclick="exportTableToCSV('projReportTable', 'project_task_analytics.csv')"><i class="bi bi-file-earmark-spreadsheet me-1"></i>Export CSV</button>
+                <a class="btn btn-outline-primary" href="{{ url_for('reports_dashboard') }}"><i class="bi bi-arrow-left me-1"></i>Back to Hub</a>
+            </div>
+        </div>
+
+        <div class="card shadow-sm border-0 mb-4 report-filter-bar">
+            <div class="card-body py-3">
+                <form method="GET" action="{{ url_for('reports_projects') }}" class="row g-3 align-items-center">
+                    <div class="col-md-4">
+                        <label class="form-label small text-muted mb-1 fw-bold">Filter Workload by Task Status</label>
+                        <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+                            <option value="">All Task Statuses</option>
+                            <option value="Completed" {% if selected_status == 'Completed' %}selected{% endif %}>Completed</option>
+                            <option value="In Progress" {% if selected_status == 'In Progress' %}selected{% endif %}>In Progress</option>
+                            <option value="Pending" {% if selected_status == 'Pending' %}selected{% endif %}>Pending</option>
+                            <option value="Blocked" {% if selected_status == 'Blocked' %}selected{% endif %}>Blocked</option>
+                        </select>
+                    </div>
+                    {% if selected_status %}
+                        <div class="col-md-2 mt-4">
+                            <a href="{{ url_for('reports_projects') }}" class="btn btn-sm btn-link text-decoration-none"><i class="bi bi-x-circle me-1"></i>Clear Filter</a>
+                        </div>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+
+        <div class="row g-4 mb-4">
+            <div class="col-md-3">
+                <div class="card shadow-sm border-0 border-start border-primary border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">Active Projects</div>
+                        <div class="display-6 fw-bold text-dark my-1">{{ total_projects }}</div>
+                        <span class="text-muted small">Registered client projects</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card shadow-sm border-0 border-start border-info border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">Total Assigned Tasks</div>
+                        <div class="display-6 fw-bold text-dark my-1">{{ total_tasks }}</div>
+                        <span class="text-muted small">System task items</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card shadow-sm border-0 border-start border-success border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">Task Completion Rate</div>
+                        <div class="display-6 fw-bold text-success my-1">{{ '%.0f'|format(completion_rate) }}%</div>
+                        <span class="text-muted small">{{ completed_tasks }} of {{ total_tasks }} completed</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card shadow-sm border-0 border-start border-warning border-4 h-100">
+                    <div class="card-body">
+                        <div class="text-muted small fw-semibold">Task Hours Logged</div>
+                        <div class="display-6 fw-bold text-dark my-1">{{ '%.1f'|format(total_logged_hours) }} hrs</div>
+                        <span class="text-muted small">Time log records</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row g-4 mb-4">
+            <div class="col-lg-5">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white py-3 border-0">
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-pie-chart-fill me-2 text-primary"></i>Task Status Distribution</h5>
+                    </div>
+                    <div class="card-body text-center d-flex flex-column justify-content-center">
+                        <div style="height: 220px; position: relative;" class="mx-auto">
+                            <canvas id="taskStatusChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-7">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-white py-3 border-0">
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-bar-chart-fill me-2 text-primary"></i>Employee Task Workload Overview</h5>
+                    </div>
+                    <div class="card-body">
+                        <div style="height: 220px; position: relative;">
+                            <canvas id="workloadChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-person-workspace me-2 text-primary"></i>Employee Workload Summary Directory</h5>
+                <button type="button" class="btn btn-sm btn-outline-success" onclick="exportTableToCSV('projReportTable', 'employee_workload_summary.csv')"><i class="bi bi-download me-1"></i>CSV</button>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0" id="projReportTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Assigned Employee</th>
+                                <th>Total Assigned Tasks</th>
+                                <th>Completed Tasks</th>
+                                <th>Pending Tasks</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for w in workload_rows %}
+                                <tr>
+                                    <td class="fw-bold">{{ w.assigned_to }}</td>
+                                    <td><span class="badge bg-primary fs-6">{{ w.total_tasks }}</span></td>
+                                    <td><span class="badge bg-success fs-6">{{ w.completed_tasks }}</span></td>
+                                    <td><span class="badge bg-warning text-dark fs-6">{{ w.pending_tasks }}</span></td>
+                                </tr>
+                            {% else %}
+                                <tr><td colspan="4" class="text-center py-4 text-muted">No task assignment workload data available matching filter.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script>
+            function exportTableToCSV(tableId, filename) {
+                var table = document.getElementById(tableId);
+                if (!table) return;
+                var rows = table.querySelectorAll("tr");
+                var csv = [];
+                for (var i = 0; i < rows.length; i++) {
+                    var row = [], cols = rows[i].querySelectorAll("td, th");
+                    for (var j = 0; j < cols.length; j++) {
+                        var text = cols[j].innerText.replace(/(\\r\\n|\\n|\\r)/gm, " ").replace(/"/g, '""').trim();
+                        row.push('"' + text + '"');
+                    }
+                    csv.push(row.join(","));
+                }
+                var csvFile = new Blob([csv.join("\\n")], {type: "text/csv"});
+                var downloadLink = document.createElement("a");
+                downloadLink.download = filename;
+                downloadLink.href = window.URL.createObjectURL(csvFile);
+                downloadLink.style.display = "none";
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
+            }
+
+            document.addEventListener('DOMContentLoaded', function() {
+                const ctxStatus = document.getElementById('taskStatusChart').getContext('2d');
+                new Chart(ctxStatus, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Completed', 'In Progress', 'Pending', 'Blocked'],
+                        datasets: [{
+                            data: [
+                                {{ status_dict.get('Completed', 0) }},
+                                {{ status_dict.get('In Progress', 0) }},
+                                {{ status_dict.get('Pending', 0) }},
+                                {{ status_dict.get('Blocked', 0) }}
+                            ],
+                            backgroundColor: ['#22c55e', '#0284c7', '#f59e0b', '#ef4444']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false
+                    }
+                });
+
+                const ctxWorkload = document.getElementById('workloadChart').getContext('2d');
+                new Chart(ctxWorkload, {
+                    type: 'bar',
+                    data: {
+                        labels: {{ workload_names|tojson }},
+                        datasets: [{
+                            label: 'Assigned Tasks',
+                            data: {{ workload_tasks|tojson }},
+                            backgroundColor: '#4f46e5',
+                            borderRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+                    }
+                });
+            });
+        </script>
+        {% endblock %}
+        """,
+        total_projects=total_projects,
+        total_tasks=total_tasks,
+        completed_tasks=completed_tasks,
+        completion_rate=completion_rate,
+        total_logged_hours=total_logged_hours,
+        status_dict=status_dict,
+        workload_rows=workload_rows,
+        workload_names=workload_names,
+        workload_tasks=workload_tasks,
+        selected_status=selected_status,
+    )
+
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
     app.run(debug=True)
