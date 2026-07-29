@@ -1551,34 +1551,7 @@ def admin():
     if current_user.role != "admin":
         flash("Admin access required.", "danger")
         return redirect(url_for("dashboard"))
-
-    return render_template_string(
-        """
-        <!doctype html>
-        <html lang="en">
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Admin Panel</title>
-            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-        </head>
-        <body class="bg-light">
-            <div class="container py-5">
-                <div class="card shadow-sm">
-                    <div class="card-body">
-                        <h1 class="h3 mb-3">Admin Panel</h1>
-                        <p>You are signed in as an administrator.</p>
-                        <a class="btn btn-primary" href="{{ url_for('dashboard') }}">Back to dashboard</a>
-                        <a class="btn btn-outline-secondary ms-2" href="{{ url_for('create_user') }}">Create User</a>
-                        <a class="btn btn-outline-info ms-2" href="{{ url_for('admin_attendance') }}">Manage Attendance</a>
-                        <a class="btn btn-outline-primary ms-2" href="{{ url_for('admin_employees') }}">Manage Employees</a>
-                    </div>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-    )
+    return redirect(url_for("admin_users"))
 
 
 @app.route("/admin/create-user", methods=["GET", "POST"])
@@ -1814,6 +1787,132 @@ def admin_attendance():
         """,
         rows=rows,
     )
+
+
+@app.route('/admin/users')
+@login_required
+def admin_users():
+    if current_user.role != 'admin':
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('dashboard'))
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, username, full_name, email, role, force_password_change FROM users ORDER BY username"
+        ).fetchall()
+        users = [dict(row) for row in rows]
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}User Accounts Management{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>User Accounts</h1>
+                <p>Manage authentication login accounts separately from employee HR records.</p>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-person-badge-fill me-2 text-primary"></i>Authentication User Accounts</h5>
+                <span class="badge bg-light text-dark border">Total Users: {{ users|length }}</span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Username / Name</th>
+                                <th>Email</th>
+                                <th>Role</th>
+                                <th>Status</th>
+                                <th class="text-end">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {% for u in users %}
+                            <tr>
+                                <td class="fw-bold">
+                                    <i class="bi bi-person-circle me-2 text-secondary"></i>
+                                    @{{ u.username }}
+                                    {% if u.full_name %}<br><small class="text-muted ms-4">{{ u.full_name }}</small>{% endif %}
+                                </td>
+                                <td>{{ u.email or 'N/A' }}</td>
+                                <td>
+                                    {% if u.role == 'admin' %}
+                                        <span class="badge bg-primary fs-6"><i class="bi bi-shield-check me-1"></i>Admin</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary fs-6">User</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if u.force_password_change %}
+                                        <span class="badge bg-warning text-dark"><i class="bi bi-exclamation-triangle me-1"></i>Pending Password Change</span>
+                                    {% else %}
+                                        <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Active</span>
+                                    {% endif %}
+                                </td>
+                                <td class="text-end">
+                                    {% if u.id == current_user.id %}
+                                        <span class="badge bg-light text-muted border py-2 px-3"><i class="bi bi-lock-fill me-1"></i>Current Session</span>
+                                    {% else %}
+                                        <form method="post" action="{{ url_for('delete_user', user_id=u.id) }}" class="d-inline" onsubmit="return confirm('Are you sure you want to permanently delete user account @{{ u.username }}? This action cannot be undone.');">
+                                            <button class="btn btn-sm btn-outline-danger" type="submit"><i class="bi bi-trash me-1"></i>Delete User</button>
+                                        </form>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% else %}
+                            <tr>
+                                <td colspan="5" class="text-center py-4 text-muted">No user accounts found.</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endblock %}
+        """,
+        users=users,
+    )
+
+
+@app.route('/admin/users/<int:user_id>/delete', methods=['POST'])
+@login_required
+def delete_user(user_id):
+    if current_user.role != 'admin':
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('dashboard'))
+
+    if user_id == current_user.id:
+        flash('You cannot delete your own active admin account.', 'danger')
+        return redirect(url_for('admin_users'))
+
+    with get_db() as conn:
+        u = conn.execute("SELECT id, username FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not u:
+            flash('User account not found.', 'warning')
+            return redirect(url_for('admin_users'))
+
+        username = u['username']
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+
+    flash(f"User account '@{username}' deleted successfully.", 'success')
+    return redirect(url_for('admin_users'))
 
 
 @app.route('/admin/employees')
