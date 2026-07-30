@@ -702,10 +702,14 @@ def ensure_settings_tables():
                 sidebar_style TEXT DEFAULT 'default',
                 email_notifications INTEGER DEFAULT 1,
                 in_app_notifications INTEGER DEFAULT 1,
+                dashboard_reset_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             )
         """
         )
+        cols = [col["name"] for col in conn.execute("PRAGMA table_info(user_preferences)").fetchall()]
+        if "dashboard_reset_at" not in cols:
+            conn.execute("ALTER TABLE user_preferences ADD COLUMN dashboard_reset_at TEXT")
         conn.commit()
 
 
@@ -1045,6 +1049,29 @@ def change_password():
     )
 
 
+@app.route("/admin/dashboard/reset", methods=["POST"])
+@login_required
+def reset_today_dashboard():
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
+
+    now_iso = datetime.datetime.now().isoformat()  # noqa: DTZ005
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_preferences (user_id, dashboard_reset_at)
+            VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET dashboard_reset_at = excluded.dashboard_reset_at
+            """,
+            (current_user.id, now_iso),
+        )
+        conn.commit()
+
+    flash("Today's dashboard summary counters have been reset. New employee activity will update the dashboard in real-time.", "success")
+    return redirect(url_for("dashboard"))
+
+
 @app.route("/dashboard")
 @login_required
 def dashboard():
@@ -1060,22 +1087,136 @@ def dashboard():
             (current_user.id,),
         ).fetchall()
 
+    admin_summary = None
+    if current_user.role == "admin":
+        with get_db() as conn:
+            pref = conn.execute(
+                "SELECT dashboard_reset_at FROM user_preferences WHERE user_id = ?",
+                (current_user.id,),
+            ).fetchone()
+            reset_at = pref["dashboard_reset_at"] if pref and pref["dashboard_reset_at"] and pref["dashboard_reset_at"].startswith(today) else None
+
+            total_employees = conn.execute("SELECT COUNT(*) FROM employees").fetchone()[0]
+
+            if reset_at:
+                punched_in = conn.execute(
+                    "SELECT COUNT(DISTINCT user_id) FROM attendance WHERE date = ? AND punch_in_time >= ?",
+                    (today, reset_at),
+                ).fetchone()[0]
+                punched_out = conn.execute(
+                    "SELECT COUNT(DISTINCT user_id) FROM attendance WHERE date = ? AND punch_out_time >= ?",
+                    (today, reset_at),
+                ).fetchone()[0]
+            else:
+                punched_in = conn.execute(
+                    "SELECT COUNT(DISTINCT user_id) FROM attendance WHERE date = ? AND punch_in_time IS NOT NULL",
+                    (today,),
+                ).fetchone()[0]
+                punched_out = conn.execute(
+                    "SELECT COUNT(DISTINCT user_id) FROM attendance WHERE date = ? AND punch_out_time IS NOT NULL",
+                    (today,),
+                ).fetchone()[0]
+
+            on_leave = conn.execute(
+                "SELECT COUNT(*) FROM leave_requests WHERE status = 'Approved' AND start_date <= ? AND end_date >= ?",
+                (today, today),
+            ).fetchone()[0]
+
+            pending_punch_in = max(0, total_employees - punched_in - on_leave)
+
+            admin_summary = {
+                "total_employees": total_employees,
+                "punched_in": punched_in,
+                "punched_out": punched_out,
+                "pending_punch_in": pending_punch_in,
+                "on_leave": on_leave,
+                "reset_at": reset_at,
+            }
+
     return render_template_string(
         """
         {% extends "base.html" %}
         {% block title %}Dashboard{% endblock %}
         {% block page_content %}
-                <div class="page-header">
-                    <h1>Dashboard</h1>
-                    <p>Welcome back, {{ current_user.username }}.</p>
+                <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+                    <div>
+                        <h1 class="h3 mb-1">Dashboard</h1>
+                        <p class="text-muted mb-0">Welcome back, <strong>{{ current_user.username }}</strong>.</p>
+                    </div>
+                    {% if current_user.role == 'admin' %}
+                        <div>
+                            <form id="resetDashboardForm" method="post" action="{{ url_for('reset_today_dashboard') }}" style="display:none;"></form>
+                            <button type="button" class="btn btn-outline-warning shadow-sm" onclick="confirmResetDashboard()">
+                                <i class="bi bi-arrow-counterclockwise me-1"></i>Reset Today's Dashboard
+                            </button>
+                        </div>
+                    {% endif %}
                 </div>
+
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        {% for category, message in messages %}
+                            <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                                {{ message }}
+                                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+
+                {% if admin_summary %}
+                <div class="card shadow-sm mb-4 border-0">
+                    <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                        <h5 class="card-title mb-0 fw-bold text-primary"><i class="bi bi-speedometer2 me-2"></i>Today's Organization Attendance Summary</h5>
+                        {% if admin_summary.reset_at %}
+                            <span class="badge bg-secondary">Summary reset at {{ admin_summary.reset_at[11:16] }}</span>
+                        {% endif %}
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3 text-center">
+                            <div class="col-md-2 col-6">
+                                <div class="p-3 border rounded bg-light">
+                                    <div class="text-muted small fw-semibold">Total Employees</div>
+                                    <div class="fs-3 fw-bold text-dark">{{ admin_summary.total_employees }}</div>
+                                </div>
+                            </div>
+                            <div class="col-md-2 col-6">
+                                <div class="p-3 border rounded bg-success bg-opacity-10 border-success border-opacity-25">
+                                    <div class="text-success small fw-semibold">Punched In Today</div>
+                                    <div class="fs-3 fw-bold text-success">{{ admin_summary.punched_in }}</div>
+                                </div>
+                            </div>
+                            <div class="col-md-2 col-6">
+                                <div class="p-3 border rounded bg-info bg-opacity-10 border-info border-opacity-25">
+                                    <div class="text-info small fw-semibold">Punched Out Today</div>
+                                    <div class="fs-3 fw-bold text-info">{{ admin_summary.punched_out }}</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <div class="p-3 border rounded bg-warning bg-opacity-10 border-warning border-opacity-25">
+                                    <div class="text-warning small fw-semibold">Pending Punch-In</div>
+                                    <div class="fs-3 fw-bold text-warning">{{ admin_summary.pending_punch_in }}</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3 col-12">
+                                <div class="p-3 border rounded bg-primary bg-opacity-10 border-primary border-opacity-25">
+                                    <div class="text-primary small fw-semibold">On Approved Leave</div>
+                                    <div class="fs-3 fw-bold text-primary">{{ admin_summary.on_leave }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+
                 <div class="card shadow-sm mb-4">
                     <div class="card-body">
+                        <h5 class="card-title fw-bold mb-3">Quick Punch Action</h5>
                         <form method="post" action="{{ url_for('punch_in') }}" style="display:inline-block;">
-                            <button class="btn btn-success">Punch In</button>
+                            <button class="btn btn-success"><i class="bi bi-box-arrow-in-right me-1"></i>Punch In</button>
                         </form>
                         <form method="post" action="{{ url_for('punch_out') }}" style="display:inline-block; margin-left:8px;">
-                            <button class="btn btn-danger">Punch Out</button>
+                            <button class="btn btn-danger"><i class="bi bi-box-arrow-right me-1"></i>Punch Out</button>
                         </form>
                     </div>
                 </div>
@@ -1120,10 +1261,19 @@ def dashboard():
                         </div>
                     </div>
                 </div>
+
+                <script>
+                    function confirmResetDashboard() {
+                        if (confirm("Are you sure you want to reset today's dashboard summary view? This will only reset the active dashboard summary counters and will NOT delete or alter any attendance records in the database.")) {
+                            document.getElementById('resetDashboardForm').submit();
+                        }
+                    }
+                </script>
         {% endblock %}
         """,
         today_row=row,
         records=records,
+        admin_summary=admin_summary,
     )
 
 
