@@ -1,8 +1,21 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-bs-theme="{{ current_user_theme if current_user_theme in ['light', 'dark'] else '' }}" data-theme-preference="{{ current_user_theme or 'light' }}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script>
+        (function() {
+            var themePref = "{{ current_user_theme or 'light' }}";
+            var effectiveTheme = themePref;
+            if (!effectiveTheme || effectiveTheme === 'system') {
+                effectiveTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+            }
+            document.documentElement.setAttribute('data-bs-theme', effectiveTheme);
+            document.documentElement.setAttribute('data-theme', effectiveTheme);
+            localStorage.setItem('hrms-theme-preference', themePref);
+            localStorage.setItem('hrms-effective-theme', effectiveTheme);
+        })();
+    </script>
     <title>{% block title %}HRMS{% endblock %} | HRMS</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

@@ -14,8 +14,58 @@
     });
   }
 
+  // Theme Manager
+  function applyTheme(themePref) {
+    let effective = themePref;
+    if (!effective || effective === 'system') {
+      effective = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    document.documentElement.setAttribute('data-bs-theme', effective);
+    document.documentElement.setAttribute('data-theme', effective);
+    if (document.body) {
+      document.body.setAttribute('data-bs-theme', effective);
+    }
+    localStorage.setItem('hrms-theme-preference', themePref);
+    localStorage.setItem('hrms-effective-theme', effective);
+  }
+
+  // Initial theme resolution
+  const docPref = document.documentElement.getAttribute('data-theme-preference');
+  const storedPref = localStorage.getItem('hrms-theme-preference');
+  const initialPref = docPref || storedPref || 'light';
+  applyTheme(initialPref);
+
+  // Listen for OS system theme changes
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    const currentPref = localStorage.getItem('hrms-theme-preference') || 'system';
+    if (currentPref === 'system') {
+      applyTheme('system');
+    }
+  });
+
+  window.setHrmsTheme = function(themePref) {
+    applyTheme(themePref);
+    fetch('/api/user-preferences/theme', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ theme: themePref })
+    }).catch(err => console.error('Failed to sync theme:', err));
+  };
+
   // Fallback and instant toggle handling for collapse dropdowns
   document.addEventListener('DOMContentLoaded', () => {
+    // Attach live change listeners for theme radio buttons on Appearance Settings page
+    ['themeLight', 'themeDark', 'themeSystem'].forEach(id => {
+      const radio = document.getElementById(id);
+      if (radio) {
+        radio.addEventListener('change', (e) => {
+          if (e.target.checked) {
+            window.setHrmsTheme(e.target.value);
+          }
+        });
+      }
+    });
+
     document.querySelectorAll('[data-bs-toggle="collapse"]').forEach((toggleBtn) => {
       toggleBtn.addEventListener('click', (e) => {
         const targetSelector = toggleBtn.getAttribute('href') || toggleBtn.getAttribute('data-bs-target');

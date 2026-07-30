@@ -757,6 +757,48 @@ def load_user(user_id):
     return User.from_db(row)
 
 
+@app.context_processor
+def inject_user_preferences():
+    if current_user.is_authenticated:
+        try:
+            with get_db() as conn:
+                pref = conn.execute(
+                    "SELECT theme, sidebar_style FROM user_preferences WHERE user_id = ?",
+                    (current_user.id,),
+                ).fetchone()
+                if pref:
+                    return {
+                        "current_user_theme": pref["theme"] or "light",
+                        "current_user_sidebar_style": pref["sidebar_style"] or "default",
+                    }
+        except Exception:  # noqa: BLE001
+            pass
+    return {
+        "current_user_theme": "light",
+        "current_user_sidebar_style": "default",
+    }
+
+
+@app.route("/api/user-preferences/theme", methods=["POST"])
+@login_required
+def api_update_theme_preference():
+    data = request.get_json(silent=True) or {}
+    theme = (data.get("theme") or request.form.get("theme") or "light").strip()
+    if theme not in ["light", "dark", "system"]:
+        theme = "light"
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_preferences (user_id, theme)
+            VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET theme = excluded.theme
+            """,
+            (current_user.id, theme),
+        )
+        conn.commit()
+    return jsonify({"status": "success", "theme": theme})
+
+
 @app.route("/")
 def index():
     return render_template_string(
@@ -1100,12 +1142,14 @@ def my_tasks():
     return render_template_string(
         """
         <!doctype html>
-        <html lang="en">
+        <html lang="en" data-bs-theme="{{ current_user_theme if current_user_theme in ['light', 'dark'] else '' }}" data-theme-preference="{{ current_user_theme or 'light' }}">
         <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>My Tasks</title>
             <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+            <link href="{{ url_for('static', filename='css/hrms-ui.css') }}" rel="stylesheet">
+            <script src="{{ url_for('static', filename='js/hrms-ui.js') }}"></script>
         </head>
         <body class="bg-light">
             <div class="container py-5">
@@ -1555,12 +1599,14 @@ def task_management():
     return render_template_string(
         """
         <!doctype html>
-        <html lang="en">
+        <html lang="en" data-bs-theme="{{ current_user_theme if current_user_theme in ['light', 'dark'] else '' }}" data-theme-preference="{{ current_user_theme or 'light' }}">
         <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>Task Management</title>
             <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+            <link href="{{ url_for('static', filename='css/hrms-ui.css') }}" rel="stylesheet">
+            <script src="{{ url_for('static', filename='js/hrms-ui.js') }}"></script>
         </head>
         <body class="bg-light">
             <div class="container py-5">
