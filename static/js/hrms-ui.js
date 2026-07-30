@@ -66,6 +66,50 @@
       }
     });
 
+    // Auto-fill Start Date and End Date when date preset option changes
+    function setupDateFilterSync(selectId, startId, endId) {
+      const selectEl = document.getElementById(selectId);
+      const startEl = document.getElementById(startId);
+      const endEl = document.getElementById(endId);
+      if (!selectEl || !startEl || !endEl) return;
+
+      selectEl.addEventListener('change', () => {
+        const val = selectEl.value;
+        const today = new Date();
+        const formatDate = (d) => {
+          const year = d.getFullYear();
+          const month = String(d.getMonth() + 1).padStart(2, '0');
+          const day = String(d.getDate()).padStart(2, '0');
+          return `${year}-${month}-${day}`;
+        };
+
+        if (val === 'today') {
+          startEl.value = formatDate(today);
+          endEl.value = formatDate(today);
+        } else if (val === 'last_7') {
+          const d = new Date(today);
+          d.setDate(d.getDate() - 6);
+          startEl.value = formatDate(d);
+          endEl.value = formatDate(today);
+        } else if (val === 'last_30') {
+          const d = new Date(today);
+          d.setDate(d.getDate() - 29);
+          startEl.value = formatDate(d);
+          endEl.value = formatDate(today);
+        } else if (val === 'this_month') {
+          const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+          startEl.value = formatDate(firstDay);
+          endEl.value = formatDate(today);
+        } else if (val === 'all') {
+          startEl.value = '';
+          endEl.value = '';
+        }
+      });
+    }
+
+    setupDateFilterSync('employeeDateFilterSelect', 'employeeStartDateInput', 'employeeEndDateInput');
+    setupDateFilterSync('adminDateFilterSelect', 'adminStartDateInput', 'adminEndDateInput');
+
     document.querySelectorAll('[data-bs-toggle="collapse"]').forEach((toggleBtn) => {
       toggleBtn.addEventListener('click', (e) => {
         const targetSelector = toggleBtn.getAttribute('href') || toggleBtn.getAttribute('data-bs-target');

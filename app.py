@@ -190,6 +190,27 @@ def get_user_task_names(conn, user):
     return list(names)
 
 
+def resolve_date_range(date_filter, start_date_input="", end_date_input=""):
+    """Calculate start and end ISO dates for date range presets."""
+    today = datetime.date.today()  # noqa: DTZ011
+    df = (date_filter or "all").strip().lower()
+    start_str = (start_date_input or "").strip()
+    end_str = (end_date_input or "").strip()
+
+    if df == "today":
+        return today.isoformat(), today.isoformat()
+    if df == "last_7":
+        return (today - datetime.timedelta(days=6)).isoformat(), today.isoformat()
+    if df == "last_30":
+        return (today - datetime.timedelta(days=29)).isoformat(), today.isoformat()
+    if df == "this_month":
+        start_of_month = today.replace(day=1).isoformat()
+        return start_of_month, today.isoformat()
+    if df == "custom" or start_str or end_str:
+        return start_str or None, end_str or None
+    return None, None
+
+
 # Helper to save uploaded files and return stored path (relative to instance)
 def save_uploaded_file(file_storage):
     if not file_storage:
@@ -1113,6 +1134,12 @@ def my_tasks():
         return redirect(url_for("task_management"))
 
     today = datetime.date.today().isoformat()  # noqa: DTZ011  # Naive date check for task management
+    date_filter = (request.args.get("date_filter") or "all").strip()
+    start_date = (request.args.get("start_date") or "").strip()
+    end_date = (request.args.get("end_date") or "").strip()
+
+    calc_start, calc_end = resolve_date_range(date_filter, start_date, end_date)
+
     with get_db() as conn:
         employee_name_filter = get_user_task_names(conn, current_user)
 
@@ -1120,19 +1147,24 @@ def my_tasks():
             tasks = []
         else:
             placeholders = ", ".join("?" for _ in employee_name_filter)
-            tasks = conn.execute(
-                f"""
+            sql = f"""
                 SELECT t.id, t.title, t.task_category, t.description, t.project, t.assigned_to, t.assigned_by, t.assigned_date, t.deadline,
                        t.priority, t.estimated_hours, t.recurring_type, t.status, t.completed_by,
                        COALESCE(SUM(l.hours_worked), 0) AS total_logged_hours
                 FROM tasks t
                 LEFT JOIN time_logs l ON l.task_id = t.id
                 WHERE t.assigned_to IN ({placeholders}) AND (t.status IS NULL OR t.status != 'Completed')
-                GROUP BY t.id
-                ORDER BY t.assigned_date, t.deadline, t.title
-                """,
-                employee_name_filter,
-            ).fetchall()
+            """
+            params = list(employee_name_filter)
+            if calc_start:
+                sql += " AND t.assigned_date >= ?"
+                params.append(calc_start)
+            if calc_end:
+                sql += " AND t.assigned_date <= ?"
+                params.append(calc_end)
+
+            sql += " GROUP BY t.id ORDER BY t.assigned_date, t.deadline, t.title"
+            tasks = conn.execute(sql, params).fetchall()
 
     current_tasks = []
     future_tasks = []
@@ -1170,8 +1202,39 @@ def my_tasks():
                         {% endfor %}
                     {% endif %}
                 {% endwith %}
+
+                <div class="card shadow-sm mb-4">
+                    <div class="card-body">
+                        <form method="get" class="row g-3 align-items-end">
+                            <div class="col-md-4">
+                                <label class="form-label small fw-semibold">Date Filter</label>
+                                <select class="form-select form-select-sm" name="date_filter" id="employeeDateFilterSelect">
+                                    <option value="all" {% if date_filter == 'all' %}selected{% endif %}>All Tasks</option>
+                                    <option value="today" {% if date_filter == 'today' %}selected{% endif %}>Today</option>
+                                    <option value="last_7" {% if date_filter == 'last_7' %}selected{% endif %}>Last 7 Days</option>
+                                    <option value="last_30" {% if date_filter == 'last_30' %}selected{% endif %}>Last 30 Days</option>
+                                    <option value="this_month" {% if date_filter == 'this_month' %}selected{% endif %}>This Month</option>
+                                    <option value="custom" {% if date_filter == 'custom' %}selected{% endif %}>Custom Date Range</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label small fw-semibold">Start Date</label>
+                                <input type="date" class="form-control form-control-sm" name="start_date" id="employeeStartDateInput" value="{{ start_date or '' }}">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label small fw-semibold">End Date</label>
+                                <input type="date" class="form-control form-control-sm" name="end_date" id="employeeEndDateInput" value="{{ end_date or '' }}">
+                            </div>
+                            <div class="col-md-2 d-flex gap-2">
+                                <button type="submit" class="btn btn-sm btn-primary w-100"><i class="bi bi-funnel me-1"></i>Filter</button>
+                                <a href="{{ url_for('my_tasks') }}" class="btn btn-sm btn-outline-secondary w-100">Reset</a>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
                 {% if not tasks %}
-                    <div class="alert alert-info">No tasks assigned to you yet.</div>
+                    <div class="alert alert-info">No tasks match the selected filter criteria.</div>
                 {% endif %}
                 {% if current_tasks %}
                     <div class="card shadow-sm mb-4">
@@ -1325,6 +1388,9 @@ def my_tasks():
         current_tasks=current_tasks,
         future_tasks=future_tasks,
         recurring_tasks=recurring_tasks,
+        date_filter=date_filter,
+        start_date=start_date,
+        end_date=end_date,
     )
 
 
@@ -1433,7 +1499,12 @@ def task_management():
     employee_filter = (request.args.get("employee_filter") or "").strip()
     project_filter = (request.args.get("project_filter") or "").strip()
     status_filter = (request.args.get("status_filter") or "").strip()
+    date_filter = (request.args.get("date_filter") or "all").strip()
+    start_date = (request.args.get("start_date") or "").strip()
+    end_date = (request.args.get("end_date") or "").strip()
     edit_id = (request.args.get("edit_id") or "").strip()
+
+    calc_start, calc_end = resolve_date_range(date_filter, start_date, end_date)
 
     edit_task = None
     if edit_id:
@@ -1597,6 +1668,12 @@ def task_management():
     if status_filter:
         query += " AND t.status = ?"
         params.append(status_filter)
+    if calc_start:
+        query += " AND t.assigned_date >= ?"
+        params.append(calc_start)
+    if calc_end:
+        query += " AND t.assigned_date <= ?"
+        params.append(calc_end)
     query += " GROUP BY t.id ORDER BY t.assigned_date DESC, t.deadline DESC, t.title"
 
     with get_db() as conn:
@@ -1733,28 +1810,28 @@ def task_management():
                 <div class="card shadow-sm">
                     <div class="card-body">
                         <h2 class="h5">Filter Tasks</h2>
-                        <form method="get" class="row g-2 align-items-end">
-                            <div class="col-md-3">
-                                <label class="form-label small">Employee</label>
-                                <select class="form-select" name="employee_filter">
+                        <form method="get" class="row g-3 align-items-end">
+                            <div class="col-md-2">
+                                <label class="form-label small fw-semibold">Employee</label>
+                                <select class="form-select form-select-sm" name="employee_filter">
                                     <option value="">All</option>
                                     {% for employee in employees %}
                                         <option value="{{ employee.name }}" {% if employee_filter == employee.name %}selected{% endif %}>{{ employee.name }}</option>
                                     {% endfor %}
                                 </select>
                             </div>
-                            <div class="col-md-3">
-                                <label class="form-label small">Project</label>
-                                <select class="form-select" name="project_filter">
+                            <div class="col-md-2">
+                                <label class="form-label small fw-semibold">Project</label>
+                                <select class="form-select form-select-sm" name="project_filter">
                                     <option value="">All</option>
                                     {% for project in projects %}
                                         <option value="{{ project.client_name }}" {% if project_filter == project.client_name %}selected{% endif %}>{{ project.client_name }}</option>
                                     {% endfor %}
                                 </select>
                             </div>
-                            <div class="col-md-3">
-                                <label class="form-label small">Status</label>
-                                <select class="form-select" name="status_filter">
+                            <div class="col-md-2">
+                                <label class="form-label small fw-semibold">Status</label>
+                                <select class="form-select form-select-sm" name="status_filter">
                                     <option value="">All</option>
                                     <option value="Pending" {% if status_filter == 'Pending' %}selected{% endif %}>Pending</option>
                                     <option value="In Progress" {% if status_filter == 'In Progress' %}selected{% endif %}>In Progress</option>
@@ -1762,11 +1839,28 @@ def task_management():
                                     <option value="Completed" {% if status_filter == 'Completed' %}selected{% endif %}>Completed</option>
                                 </select>
                             </div>
-                            <div class="col-auto">
-                                <button class="btn btn-primary" type="submit">Filter</button>
+                            <div class="col-md-2">
+                                <label class="form-label small fw-semibold">Date Filter</label>
+                                <select class="form-select form-select-sm" name="date_filter" id="adminDateFilterSelect">
+                                    <option value="all" {% if date_filter == 'all' %}selected{% endif %}>All Tasks</option>
+                                    <option value="today" {% if date_filter == 'today' %}selected{% endif %}>Today</option>
+                                    <option value="last_7" {% if date_filter == 'last_7' %}selected{% endif %}>Last 7 Days</option>
+                                    <option value="last_30" {% if date_filter == 'last_30' %}selected{% endif %}>Last 30 Days</option>
+                                    <option value="this_month" {% if date_filter == 'this_month' %}selected{% endif %}>This Month</option>
+                                    <option value="custom" {% if date_filter == 'custom' %}selected{% endif %}>Custom Date Range</option>
+                                </select>
                             </div>
-                            <div class="col-auto">
-                                <a class="btn btn-outline-secondary" href="{{ url_for('task_management') }}">Reset</a>
+                            <div class="col-md-2">
+                                <label class="form-label small fw-semibold">Start Date</label>
+                                <input type="date" class="form-control form-control-sm" name="start_date" id="adminStartDateInput" value="{{ start_date or '' }}">
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label small fw-semibold">End Date</label>
+                                <input type="date" class="form-control form-control-sm" name="end_date" id="adminEndDateInput" value="{{ end_date or '' }}">
+                            </div>
+                            <div class="col-12 d-flex justify-content-end gap-2">
+                                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('task_management') }}">Reset Filters</a>
+                                <button class="btn btn-sm btn-primary" type="submit"><i class="bi bi-funnel me-1"></i>Filter</button>
                             </div>
                         </form>
                         <div class="table-responsive mt-3">
@@ -1830,7 +1924,7 @@ def task_management():
                                     {% endfor %}
                                 {% else %}
                                     <tr>
-                                        <td colspan="17" class="text-muted">No tasks found.</td>
+                                        <td colspan="17" class="text-center text-muted py-4">No tasks found matching the selected filter criteria.</td>
                                     </tr>
                                 {% endif %}
                                 </tbody>
@@ -1879,6 +1973,9 @@ def task_management():
         employee_filter=employee_filter,
         project_filter=project_filter,
         status_filter=status_filter,
+        date_filter=date_filter,
+        start_date=start_date,
+        end_date=end_date,
     )
 
 
