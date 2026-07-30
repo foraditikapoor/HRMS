@@ -4,9 +4,10 @@ import os
 # to a simple manual loader so credentials from a .env file still work.
 try:
     from dotenv import load_dotenv
+
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
     print("DEBUG: python-dotenv loaded .env")
-except Exception:
+except Exception:  # noqa: BLE001  # Fallback manual env loader on import error
     # Manual .env parsing fallback
     dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
     if os.path.exists(dotenv_path):
@@ -23,17 +24,26 @@ except Exception:
                         if k and k not in os.environ:
                             os.environ[k] = v
             print(f"DEBUG: loaded .env manually from {dotenv_path}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # Fallback manual env loader on file error
             print("DEBUG: failed to load .env manually:", e)
     else:
         print(f"DEBUG: no .env found at {dotenv_path}")
-import secrets
+import secrets  # noqa: I001
 import smtplib
 import sqlite3
 import traceback
 from email.mime.text import MIMEText
 
-from flask import Flask, flash, jsonify, redirect, render_template_string, request, url_for, Response
+from flask import (
+    Flask,
+    flash,
+    jsonify,
+    redirect,
+    render_template_string,
+    request,
+    url_for,
+    Response,
+)
 from flask_login import (
     LoginManager,
     UserMixin,
@@ -54,34 +64,59 @@ app.config["DATABASE_PATH"] = os.path.join(app.instance_path, "users.db")
 # Update this single mapping when task categories or their predefined tasks change.
 TASK_CATEGORIES = {
     "SEO": [
-        "Prepare Previous Month's SEO Report", "Analyze GA4 & GSC Data",
-        "Review Keyword Rankings", "Share Monthly Report with Client",
-        "Finalize Monthly Action Plan", "Perform Technical SEO Audit",
-        "Check Broken Links", "Check 404 Errors", "Check Indexing Issues",
-        "Check Crawled but Not Indexed Pages", "Sitemap Check", "Generate Backlinks",
-        "Perform Competitor Analysis", "Continue Blog Content Creation & Upload",
+        "Prepare Previous Month's SEO Report",
+        "Analyze GA4 & GSC Data",
+        "Review Keyword Rankings",
+        "Share Monthly Report with Client",
+        "Finalize Monthly Action Plan",
+        "Perform Technical SEO Audit",
+        "Check Broken Links",
+        "Check 404 Errors",
+        "Check Indexing Issues",
+        "Check Crawled but Not Indexed Pages",
+        "Sitemap Check",
+        "Generate Backlinks",
+        "Perform Competitor Analysis",
+        "Continue Blog Content Creation & Upload",
     ],
     "Social Media Marketing": [
-        "Prepare Monthly Performance Report", "Prepare Next Month Social Media Content",
-        "Collect Client Approvals", "Story Posting", "Group Sharing", "Social Media Posting",
-        "Content Pointers", "Client Reminders",
+        "Prepare Monthly Performance Report",
+        "Prepare Next Month Social Media Content",
+        "Collect Client Approvals",
+        "Story Posting",
+        "Group Sharing",
+        "Social Media Posting",
+        "Content Pointers",
+        "Client Reminders",
     ],
     "Google Ads": [
-        "Review Monthly Campaign Performance", "Share Daily Reports", "Share Weekly Reports",
-        "Optimize Campaigns", "Adjust Bids", "Review Keywords", "Update Negative Keywords",
-        "Improve Ad Copy", "Verify Conversion Tracking",
+        "Review Monthly Campaign Performance",
+        "Share Daily Reports",
+        "Share Weekly Reports",
+        "Optimize Campaigns",
+        "Adjust Bids",
+        "Review Keywords",
+        "Update Negative Keywords",
+        "Improve Ad Copy",
+        "Verify Conversion Tracking",
     ],
     "Meta Ads": ["Optimize Meta Ads Campaigns", "Meta Ads Setup"],
     "Website Development": [
-        "Domain Name Research", "Domain Registration", "Website Planning", "Site Structure Setup",
-        "Homepage Design", "Content Writing", "Website Testing", "Website Launch",
+        "Domain Name Research",
+        "Domain Registration",
+        "Website Planning",
+        "Site Structure Setup",
+        "Homepage Design",
+        "Content Writing",
+        "Website Testing",
+        "Website Launch",
     ],
     "Other (Custom)": [],
 }
 
 # Uploads folder for employee documents
-app.config['UPLOAD_FOLDER'] = os.path.join(app.instance_path, 'uploads')
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+app.config["UPLOAD_FOLDER"] = os.path.join(app.instance_path, "uploads")
+os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
 # Gmail SMTP configuration
 MAIL_SERVER = "smtp.gmail.com"
@@ -101,18 +136,19 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
-logging.info(f"MAIL_USERNAME loaded: {'yes' if MAIL_USERNAME else 'no'}")
-logging.info(f"MAIL_PASSWORD loaded: {'yes' if MAIL_PASSWORD else 'no'}")
+app.logger.info(f"MAIL_USERNAME loaded: {'yes' if MAIL_USERNAME else 'no'}")
+app.logger.info(f"MAIL_PASSWORD loaded: {'yes' if MAIL_PASSWORD else 'no'}")
 
-os.makedirs(app.instance_path, exist_ok=True
-)
+os.makedirs(app.instance_path, exist_ok=True)
 
 login_manager = LoginManager(app)
 login_manager.login_view = "login"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 class User(UserMixin):
-    def __init__(self, user_id, username, password_hash, role="user", force_password_change=False):
+    def __init__(
+        self, user_id, username, password_hash, role="user", force_password_change=False
+    ):
         self.id = user_id
         self.username = username
         self.password_hash = password_hash
@@ -126,7 +162,7 @@ class User(UserMixin):
         # row expected: id, username, password_hash, role, [force_password_change]
         try:
             return User(row[0], row[1], row[2], row[3], row[4])
-        except Exception:
+        except Exception:  # noqa: BLE001  # Fallback when row indexing fails
             return User(row[0], row[1], row[2], row[3], False)
 
 
@@ -143,8 +179,8 @@ def get_user_task_names(conn, user):
         "SELECT full_name FROM users WHERE id = ?",
         (user.id,),
     ).fetchone()
-    if user_row and user_row['full_name']:
-        names.add(user_row['full_name'])
+    if user_row and user_row["full_name"]:
+        names.add(user_row["full_name"])
     return list(names)
 
 
@@ -155,19 +191,17 @@ def save_uploaded_file(file_storage):
     filename = secure_filename(file_storage.filename)
     if not filename:
         return None
-    dest_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    dest_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
     # If filename exists, append a short suffix to avoid overwrite
     base, ext = os.path.splitext(filename)
     counter = 1
     while os.path.exists(dest_path):
         filename = f"{base}_{counter}{ext}"
-        dest_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        dest_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
         counter += 1
     file_storage.save(dest_path)
     # return path relative to app root (instance path)
     return dest_path
-
-
 
 
 def send_welcome_email(recipient_email, full_name, username, temporary_password):
@@ -196,20 +230,24 @@ def send_welcome_email(recipient_email, full_name, username, temporary_password)
             server.login(MAIL_USERNAME, MAIL_PASSWORD)
             server.send_message(msg)
         print("DEBUG: Welcome email sent successfully")
-    except Exception:
+    except Exception:  # noqa: BLE001  # Email send fallback error handling
         traceback.print_exc()
 
 
 def ensure_user_columns():
     with get_db() as conn:
-        columns = [row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()]
+        columns = [
+            row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()
+        ]
         if "full_name" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN full_name TEXT")
         if "email" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
         if "force_password_change" not in columns:
             # 0 = false, 1 = true
-            conn.execute("ALTER TABLE users ADD COLUMN force_password_change INTEGER DEFAULT 0")
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN force_password_change INTEGER DEFAULT 0"
+            )
         conn.commit()
 
 
@@ -258,7 +296,9 @@ def ensure_employee_table():
             )
             """
         )
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(employees)").fetchall()}
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(employees)").fetchall()
+        }
         if "user_id" not in columns:
             conn.execute("ALTER TABLE employees ADD COLUMN user_id INTEGER")
         if "contact_number" not in columns:
@@ -292,7 +332,9 @@ def ensure_projects_table():
         )
         conn.commit()
 
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()
+        }
         required_columns = [
             "client_id",
             "client_name",
@@ -308,14 +350,17 @@ def ensure_projects_table():
         for column_name in required_columns:
             if column_name not in columns:
                 column_type = "INTEGER" if column_name == "client_id" else "TEXT"
-                conn.execute(f"ALTER TABLE projects ADD COLUMN {column_name} {column_type}")
+                conn.execute(
+                    f"ALTER TABLE projects ADD COLUMN {column_name} {column_type}"
+                )
         conn.commit()
 
 
 def ensure_clients_table():
     """Create the client source-of-truth table without replacing existing data."""
     with get_db() as conn:
-        conn.execute("""
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS clients (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -327,38 +372,57 @@ def ensure_clients_table():
                 email TEXT,
                 website TEXT
             )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_client_id ON projects(client_id)")
+        """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_projects_client_id ON projects(client_id)"
+        )
 
         # Safely preserve legacy project client details by converting them to clients.
-        legacy_projects = conn.execute("""
+        legacy_projects = conn.execute(
+            """
             SELECT id, client_name, client_address, services, client_gst_number,
                    whatsapp_number, client_email, client_website
             FROM projects WHERE client_id IS NULL AND trim(coalesce(client_name, '')) != ''
-        """).fetchall()
+        """
+        ).fetchall()
         for project in legacy_projects:
             client = conn.execute(
                 "SELECT id FROM clients WHERE name = ? ORDER BY id LIMIT 1",
-                (project['client_name'],),
+                (project["client_name"],),
             ).fetchone()
             if client is None:
-                cursor = conn.execute("""
+                cursor = conn.execute(
+                    """
                     INSERT INTO clients (name, address, services, gst_number, contact_number, email, website)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (project['client_name'], project['client_address'], project['services'],
-                      project['client_gst_number'], project['whatsapp_number'],
-                      project['client_email'], project['client_website']))
+                """,
+                    (
+                        project["client_name"],
+                        project["client_address"],
+                        project["services"],
+                        project["client_gst_number"],
+                        project["whatsapp_number"],
+                        project["client_email"],
+                        project["client_website"],
+                    ),
+                )
                 client_id = cursor.lastrowid
             else:
-                client_id = client['id']
-            conn.execute("UPDATE projects SET client_id = ? WHERE id = ?", (client_id, project['id']))
+                client_id = client["id"]
+            conn.execute(
+                "UPDATE projects SET client_id = ? WHERE id = ?",
+                (client_id, project["id"]),
+            )
         conn.commit()
 
 
 def ensure_tasks_table():
     """Create the tasks table and add new task fields without removing task data."""
     with get_db() as conn:
-        existing_columns = [row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()]
+        existing_columns = [
+            row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()
+        ]
         if not existing_columns:
             conn.execute(
                 """
@@ -423,7 +487,9 @@ def ensure_time_logs_table():
         )
         conn.commit()
 
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(time_logs)").fetchall()}
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(time_logs)").fetchall()
+        }
         required_columns = [
             "task_id",
             "user_id",
@@ -515,17 +581,17 @@ def ensure_notifications_table():
 def create_notification(user_id, title, message, link=None):
     """Helper to push an in-app notification to a specific user (by user_id)."""
     try:
-        created_at = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        created_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # noqa: DTZ005  # Preserving local naive datetime formatting
         with get_db() as conn:
             conn.execute(
                 """
                 INSERT INTO notifications (user_id, title, message, link, is_read, created_at)
                 VALUES (?, ?, ?, ?, 0, ?)
                 """,
-                (user_id, title, message, link, created_at)
+                (user_id, title, message, link, created_at),
             )
             conn.commit()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # Catch notification error
         app.logger.error(f"Error creating notification: {e}")
 
 
@@ -533,11 +599,13 @@ def notify_admins(title, message, link=None):
     """Helper to push an in-app notification to all admin users."""
     try:
         with get_db() as conn:
-            admin_rows = conn.execute("SELECT id FROM users WHERE role = 'admin'").fetchall()
-            admin_ids = [r['id'] for r in admin_rows]
+            admin_rows = conn.execute(
+                "SELECT id FROM users WHERE role = 'admin'"
+            ).fetchall()
+            admin_ids = [r["id"] for r in admin_rows]
         for aid in admin_ids:
             create_notification(aid, title, message, link)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # Catch notification error
         app.logger.error(f"Error notifying admins: {e}")
 
 
@@ -548,32 +616,35 @@ def notify_user_by_name_or_username(identifier, title, message, link=None):
     if not identifier:
         return
     try:
-        raw_list = [n.strip() for n in str(identifier).split(',') if n.strip()]
+        raw_list = [n.strip() for n in str(identifier).split(",") if n.strip()]
         for name in raw_list:
             with get_db() as conn:
                 # 1. Match users table username or full_name
                 user = conn.execute(
                     "SELECT id FROM users WHERE username = ? OR full_name = ? ORDER BY id LIMIT 1",
-                    (name, name)
+                    (name, name),
                 ).fetchone()
-                if user and user['id']:
-                    create_notification(user['id'], title, message, link)
+                if user and user["id"]:
+                    create_notification(user["id"], title, message, link)
                     continue
 
                 # 2. Match employees table name -> user_id
                 emp = conn.execute(
                     "SELECT user_id FROM employees WHERE name = ? AND user_id IS NOT NULL ORDER BY id LIMIT 1",
-                    (name,)
+                    (name,),
                 ).fetchone()
-                if emp and emp['user_id']:
-                    create_notification(emp['user_id'], title, message, link)
-    except Exception as e:
-        app.logger.error(f"Error in notify_user_by_name_or_username for '{identifier}': {e}")
+                if emp and emp["user_id"]:
+                    create_notification(emp["user_id"], title, message, link)
+    except Exception as e:  # noqa: BLE001  # Catch notification error
+        app.logger.error(
+            f"Error in notify_user_by_name_or_username for '{identifier}': {e}"
+        )
 
 
 def ensure_settings_tables():
     with get_db() as conn:
-        conn.execute("""
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS company_settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 company_name TEXT DEFAULT 'HRMS Enterprise Solutions',
@@ -583,15 +654,19 @@ def ensure_settings_tables():
                 working_hours TEXT DEFAULT '09:00 - 18:00 (Mon-Fri)',
                 gst_number TEXT DEFAULT '27AAAAA0000A1Z5'
             )
-        """)
+        """
+        )
         row = conn.execute("SELECT COUNT(*) FROM company_settings").fetchone()[0]
         if row == 0:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO company_settings (company_name, company_email, company_address, currency, working_hours, gst_number)
                 VALUES ('HRMS Enterprise Solutions', 'contact@hrms.com', '123 Business Park, Tech Zone, India', 'INR (₹)', '09:00 - 18:00 (Mon-Fri)', '27AAAAA0000A1Z5')
-            """)
+            """
+            )
 
-        conn.execute("""
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS user_preferences (
                 user_id INTEGER PRIMARY KEY,
                 theme TEXT DEFAULT 'light',
@@ -600,18 +675,19 @@ def ensure_settings_tables():
                 in_app_notifications INTEGER DEFAULT 1,
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             )
-        """)
+        """
+        )
         conn.commit()
 
 
-@app.template_filter('inr')
+@app.template_filter("inr")
 def format_inr(amount):
     """Format numeric salary/currency amounts into Indian Rupee (INR / ₹) standard format."""
-    if amount is None or amount == '':
+    if amount is None or amount == "":
         return "₹0.00"
     try:
         val = float(amount)
-        s, *decimal = f"{val:.2f}".split('.')
+        s, *decimal = f"{val:.2f}".split(".")
         dec = f".{decimal[0]}" if decimal else ""
         if len(s) <= 3:
             return f"₹{s}{dec}"
@@ -624,7 +700,7 @@ def format_inr(amount):
         if other_digits:
             res = other_digits + res
         return f"₹{res},{last_three}{dec}"
-    except Exception:
+    except Exception:  # noqa: BLE001  # Formatting fallback on any error
         return f"₹{amount}"
 
 
@@ -729,9 +805,14 @@ def login():
         if user and check_password_hash(user.password_hash, password):
             login_user(user)
             # If the user must change their password on first login, redirect there
-            if getattr(user, 'role', None) != 'admin' and getattr(user, 'force_password_change', False):
-                flash("You must change your temporary password before continuing.", "warning")
-                return redirect(url_for('change_password'))
+            if getattr(user, "role", None) != "admin" and getattr(
+                user, "force_password_change", False
+            ):
+                flash(
+                    "You must change your temporary password before continuing.",
+                    "warning",
+                )
+                return redirect(url_for("change_password"))
             flash("Login successful.", "success")
             return redirect(url_for("dashboard"))
 
@@ -772,68 +853,71 @@ def login():
     )
 
 
-
 # Enforce password change on first login for non-admin users
 @app.before_request
 def require_password_change():
     try:
-        endpoint = request.endpoint or ''
-    except Exception:
-        endpoint = ''
+        endpoint = request.endpoint or ""
+    except Exception:  # noqa: BLE001  # Safe fallback for endpoint lookup
+        endpoint = ""
     # endpoints that must be allowed without changing password
     allowed = {
-        'change_password',
-        'logout',
-        'login',
-        'static',
-        'create_user',
-        'send_welcome_email'
+        "change_password",
+        "logout",
+        "login",
+        "static",
+        "create_user",
+        "send_welcome_email",
     }
-    if current_user.is_authenticated:
-        if getattr(current_user, 'role', None) != 'admin' and getattr(current_user, 'force_password_change', False):
-            if endpoint not in allowed and not endpoint.startswith('static'):
-                return redirect(url_for('change_password'))
+    if (
+        current_user.is_authenticated
+        and getattr(current_user, "role", None) != "admin"
+        and getattr(current_user, "force_password_change", False)
+        and endpoint not in allowed
+        and not endpoint.startswith("static")
+    ):
+        return redirect(url_for("change_password"))
 
 
-@app.route('/change-password', methods=['GET', 'POST'])
+@app.route("/change-password", methods=["GET", "POST"])
 @login_required
 def change_password():
     # Only non-admins can be forced; admins should not be here
-    if current_user.role == 'admin':
-        flash('Admins do not need to change passwords here.', 'info')
-        return redirect(url_for('dashboard'))
+    if current_user.role == "admin":
+        flash("Admins do not need to change passwords here.", "info")
+        return redirect(url_for("dashboard"))
 
-    if request.method == 'POST':
-        current_pw = request.form.get('current_password', '')
-        new_pw = request.form.get('new_password', '')
-        confirm_pw = request.form.get('confirm_password', '')
+    if request.method == "POST":
+        current_pw = request.form.get("current_password", "")
+        new_pw = request.form.get("new_password", "")
+        confirm_pw = request.form.get("confirm_password", "")
 
         if not current_pw or not new_pw or not confirm_pw:
-            flash('All fields are required.', 'danger')
-            return redirect(url_for('change_password'))
+            flash("All fields are required.", "danger")
+            return redirect(url_for("change_password"))
 
         # verify current password
         if not check_password_hash(current_user.password_hash, current_pw):
-            flash('Current password is incorrect.', 'danger')
-            return redirect(url_for('change_password'))
+            flash("Current password is incorrect.", "danger")
+            return redirect(url_for("change_password"))
 
         if new_pw != confirm_pw:
-            flash('New passwords do not match.', 'danger')
-            return redirect(url_for('change_password'))
+            flash("New passwords do not match.", "danger")
+            return redirect(url_for("change_password"))
 
         if len(new_pw) < 8:
-            flash('New password must be at least 8 characters long.', 'danger')
-            return redirect(url_for('change_password'))
+            flash("New password must be at least 8 characters long.", "danger")
+            return redirect(url_for("change_password"))
 
         # New password cannot be the same as the temporary/current password
         if check_password_hash(current_user.password_hash, new_pw):
-            flash('New password must be different from the current password.', 'danger')
-            return redirect(url_for('change_password'))
+            flash("New password must be different from the current password.", "danger")
+            return redirect(url_for("change_password"))
 
         # Update password and clear the force flag
         with get_db() as conn:
             conn.execute(
-                'UPDATE users SET password_hash = ?, force_password_change = ? WHERE id = ?',
+                "UPDATE users SET password_hash = ?, force_password_change = ? WHERE id = ?",
                 (generate_password_hash(new_pw), 0, current_user.id),
             )
             conn.commit()
@@ -842,9 +926,14 @@ def change_password():
         current_user.password_hash = generate_password_hash(new_pw)
         current_user.force_password_change = False
 
-        create_notification(current_user.id, "Security Alert: Password Changed", "Your account password was updated successfully. If you did not make this change, please contact HR.", url_for('dashboard'))
-        flash('Password changed successfully.', 'success')
-        return redirect(url_for('dashboard'))
+        create_notification(
+            current_user.id,
+            "Security Alert: Password Changed",
+            "Your account password was updated successfully. If you did not make this change, please contact HR.",
+            url_for("dashboard"),
+        )
+        flash("Password changed successfully.", "success")
+        return redirect(url_for("dashboard"))
 
     return render_template_string(
         """
@@ -889,7 +978,7 @@ def change_password():
 @login_required
 def dashboard():
     # Fetch today's attendance and recent records for the current user
-    today = datetime.date.today().isoformat()
+    today = datetime.date.today().isoformat()  # noqa: DTZ011  # Naive date check for attendance
     with get_db() as conn:
         row = conn.execute(
             "SELECT id, date, punch_in_time, punch_out_time, total_hours FROM attendance WHERE user_id = ? AND date = ?",
@@ -967,20 +1056,20 @@ def dashboard():
     )
 
 
-@app.route('/my-tasks')
+@app.route("/my-tasks")
 @login_required
 def my_tasks():
-    if current_user.role == 'admin':
-        return redirect(url_for('task_management'))
+    if current_user.role == "admin":
+        return redirect(url_for("task_management"))
 
-    today = datetime.date.today().isoformat()
+    today = datetime.date.today().isoformat()  # noqa: DTZ011  # Naive date check for task management
     with get_db() as conn:
         employee_name_filter = get_user_task_names(conn, current_user)
 
         if not employee_name_filter:
             tasks = []
         else:
-            placeholders = ', '.join('?' for _ in employee_name_filter)
+            placeholders = ", ".join("?" for _ in employee_name_filter)
             tasks = conn.execute(
                 f"""
                 SELECT t.id, t.title, t.task_category, t.description, t.project, t.assigned_to, t.assigned_by, t.assigned_date, t.deadline,
@@ -999,9 +1088,9 @@ def my_tasks():
     future_tasks = []
     recurring_tasks = []
     for task in tasks:
-        if task['recurring_type']:
+        if task["recurring_type"]:
             recurring_tasks.append(task)
-        elif task['assigned_date'] > today:
+        elif task["assigned_date"] > today:
             future_tasks.append(task)
         else:
             current_tasks.append(task)
@@ -1187,12 +1276,12 @@ def my_tasks():
     )
 
 
-@app.route('/tasks/<int:task_id>/update', methods=['POST'])
+@app.route("/tasks/<int:task_id>/update", methods=["POST"])
 @login_required
 def update_task(task_id):
-    if current_user.role == 'admin':
-        flash('Admins manage tasks from the Task Management page.', 'warning')
-        return redirect(url_for('task_management'))
+    if current_user.role == "admin":
+        flash("Admins manage tasks from the Task Management page.", "warning")
+        return redirect(url_for("task_management"))
 
     with get_db() as conn:
         task = conn.execute(
@@ -1202,75 +1291,96 @@ def update_task(task_id):
         employee_names = get_user_task_names(conn, current_user)
 
     if task is None:
-        flash('Task not found.', 'warning')
-        return redirect(url_for('my_tasks'))
+        flash("Task not found.", "warning")
+        return redirect(url_for("my_tasks"))
 
-    if task['assigned_to'] not in employee_names:
-        flash('Only assigned employees may update their own tasks.', 'danger')
-        return redirect(url_for('my_tasks'))
+    if task["assigned_to"] not in employee_names:
+        flash("Only assigned employees may update their own tasks.", "danger")
+        return redirect(url_for("my_tasks"))
 
-    hours_worked = request.form.get('hours_worked', '').strip()
-    work_notes = request.form.get('work_notes', '').strip()
-    status = request.form.get('status', 'Pending').strip()
+    hours_worked = request.form.get("hours_worked", "").strip()
+    work_notes = request.form.get("work_notes", "").strip()
+    status = request.form.get("status", "Pending").strip()
 
     if hours_worked:
         try:
             hours_value = float(hours_worked)
         except ValueError:
-            flash('Hours must be a valid number.', 'danger')
-            return redirect(url_for('my_tasks'))
+            flash("Hours must be a valid number.", "danger")
+            return redirect(url_for("my_tasks"))
         if hours_value <= 0:
-            flash('Hours cannot be zero or negative.', 'danger')
-            return redirect(url_for('my_tasks'))
+            flash("Hours cannot be zero or negative.", "danger")
+            return redirect(url_for("my_tasks"))
     else:
         hours_value = None
 
-    if status not in ['Pending', 'In Progress', 'Blocked', 'Completed']:
-        status = 'Pending'
+    if status not in ["Pending", "In Progress", "Blocked", "Completed"]:
+        status = "Pending"
 
     with get_db() as conn:
         if hours_value is not None:
             conn.execute(
                 "INSERT INTO time_logs (task_id, user_id, logged_date, hours_worked, notes) VALUES (?, ?, ?, ?, ?)",
-                (task_id, current_user.id, datetime.date.today().isoformat(), hours_value, work_notes or None),
+                (
+                    task_id,
+                    current_user.id,
+                    datetime.date.today().isoformat(),  # noqa: DTZ011  # Naive date for time logs
+                    hours_value,
+                    work_notes or None,
+                ),
             )
-        if status != task['status']:
-            completed_by = current_user.username if status == 'Completed' else None
+        if status != task["status"]:
+            completed_by = current_user.username if status == "Completed" else None
             conn.execute(
                 "UPDATE tasks SET status = ?, completed_by = ? WHERE id = ?",
                 (status, completed_by, task_id),
             )
             conn.commit()
-            notify_admins("Task Status Update", f"Task '{task['title']}' status updated to '{status}' by {current_user.username}.", url_for('task_management'))
-            notify_user_by_name_or_username(task['assigned_by'], "Task Status Update", f"Task '{task['title']}' status updated to '{status}' by {current_user.username}.", url_for('task_management'))
+            notify_admins(
+                "Task Status Update",
+                f"Task '{task['title']}' status updated to '{status}' by {current_user.username}.",
+                url_for("task_management"),
+            )
+            notify_user_by_name_or_username(
+                task["assigned_by"],
+                "Task Status Update",
+                f"Task '{task['title']}' status updated to '{status}' by {current_user.username}.",
+                url_for("task_management"),
+            )
         elif hours_value is not None:
             conn.commit()
 
-    flash('Task updated successfully.', 'success')
-    return redirect(url_for('my_tasks'))
+    flash("Task updated successfully.", "success")
+    return redirect(url_for("my_tasks"))
 
 
-@app.route('/admin/tasks', methods=['GET', 'POST'])
+@app.route("/admin/tasks", methods=["GET", "POST"])
 @login_required
 def task_management():
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
 
     with get_db() as conn:
-        employees = conn.execute("SELECT id, name FROM employees ORDER BY name").fetchall()
-        clients = conn.execute("SELECT id, name FROM clients ORDER BY lower(name), id").fetchall()
-        projects = conn.execute("""
+        employees = conn.execute(
+            "SELECT id, name FROM employees ORDER BY name"
+        ).fetchall()
+        conn.execute(
+            "SELECT id, name FROM clients ORDER BY lower(name), id"
+        )
+        projects = conn.execute(
+            """
             SELECT projects.id, clients.name AS client_name
             FROM projects
             LEFT JOIN clients ON clients.id = projects.client_id
             ORDER BY clients.name
-        """).fetchall()
+        """
+        ).fetchall()
 
-    employee_filter = (request.args.get('employee_filter') or '').strip()
-    project_filter = (request.args.get('project_filter') or '').strip()
-    status_filter = (request.args.get('status_filter') or '').strip()
-    edit_id = (request.args.get('edit_id') or '').strip()
+    employee_filter = (request.args.get("employee_filter") or "").strip()
+    project_filter = (request.args.get("project_filter") or "").strip()
+    status_filter = (request.args.get("status_filter") or "").strip()
+    edit_id = (request.args.get("edit_id") or "").strip()
 
     edit_task = None
     if edit_id:
@@ -1280,60 +1390,68 @@ def task_management():
                 (edit_id,),
             ).fetchone()
 
-    if request.method == 'POST':
-        action = request.form.get('action', 'create').strip()
-        task_id = request.form.get('task_id', '').strip()
+    if request.method == "POST":
+        action = request.form.get("action", "create").strip()
+        task_id = request.form.get("task_id", "").strip()
 
-        if action == 'delete' and task_id:
+        if action == "delete" and task_id:
             with get_db() as conn:
-                conn.execute('DELETE FROM time_logs WHERE task_id = ?', (task_id,))
-                conn.execute('DELETE FROM tasks WHERE id = ?', (task_id,))
+                conn.execute("DELETE FROM time_logs WHERE task_id = ?", (task_id,))
+                conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
                 conn.commit()
-            flash('Task deleted successfully.', 'success')
-            return redirect(url_for('task_management'))
+            flash("Task deleted successfully.", "success")
+            return redirect(url_for("task_management"))
 
-        task_category = request.form.get('task_category', '').strip()
-        selected_task = request.form.get('task_title', '').strip()
-        custom_task_title = request.form.get('custom_task_title', '').strip()
-        description = request.form.get('description', '').strip()
-        project = request.form.get('project', '').strip()
-        assigned_to = request.form.get('assigned_to', '').strip()
-        assigned_date = request.form.get('assigned_date', '').strip()
-        deadline = request.form.get('deadline', '').strip()
-        priority = request.form.get('priority', '').strip()
-        recurring_type = request.form.get('recurring_type', '').strip() or None
-        status = request.form.get('status', 'Pending').strip()
-        estimated_hours_input = request.form.get('estimated_hours', '').strip()
+        task_category = request.form.get("task_category", "").strip()
+        selected_task = request.form.get("task_title", "").strip()
+        custom_task_title = request.form.get("custom_task_title", "").strip()
+        description = request.form.get("description", "").strip()
+        project = request.form.get("project", "").strip()
+        assigned_to = request.form.get("assigned_to", "").strip()
+        assigned_date = request.form.get("assigned_date", "").strip()
+        deadline = request.form.get("deadline", "").strip()
+        priority = request.form.get("priority", "").strip()
+        recurring_type = request.form.get("recurring_type", "").strip() or None
+        status = request.form.get("status", "Pending").strip()
+        estimated_hours_input = request.form.get("estimated_hours", "").strip()
 
         if task_category not in TASK_CATEGORIES:
-            flash('Select a valid task category.', 'danger')
-            return redirect(url_for('task_management'))
-        if task_category == 'Other (Custom)':
+            flash("Select a valid task category.", "danger")
+            return redirect(url_for("task_management"))
+        if task_category == "Other (Custom)":
             title = custom_task_title
         elif selected_task in TASK_CATEGORIES[task_category]:
             title = selected_task
         else:
-            flash('Select a valid task for the selected category.', 'danger')
-            return redirect(url_for('task_management'))
+            flash("Select a valid task for the selected category.", "danger")
+            return redirect(url_for("task_management"))
 
         try:
             estimated_hours = float(estimated_hours_input)
         except ValueError:
-            flash('Estimated Hours must be a valid number.', 'danger')
-            return redirect(url_for('task_management'))
+            flash("Estimated Hours must be a valid number.", "danger")
+            return redirect(url_for("task_management"))
 
-        if not title or not project or not assigned_to or not assigned_date or not deadline or not priority or not status:
-            flash('All task fields except description are required.', 'danger')
-            return redirect(url_for('task_management'))
+        if (
+            not title
+            or not project
+            or not assigned_to
+            or not assigned_date
+            or not deadline
+            or not priority
+            or not status
+        ):
+            flash("All task fields except description are required.", "danger")
+            return redirect(url_for("task_management"))
         if estimated_hours <= 0:
-            flash('Estimated Hours must be greater than zero.', 'danger')
-            return redirect(url_for('task_management'))
+            flash("Estimated Hours must be greater than zero.", "danger")
+            return redirect(url_for("task_management"))
 
         if deadline < assigned_date:
-            flash('Deadline cannot be before Assigned Date.', 'danger')
-            return redirect(url_for('task_management'))
+            flash("Deadline cannot be before Assigned Date.", "danger")
+            return redirect(url_for("task_management"))
 
-        if action == 'edit' and task_id:
+        if action == "edit" and task_id:
             with get_db() as conn:
                 conn.execute(
                     """
@@ -1352,14 +1470,19 @@ def task_management():
                         estimated_hours,
                         recurring_type,
                         status,
-                        current_user.username if status == 'Completed' else None,
+                        current_user.username if status == "Completed" else None,
                         task_id,
                     ),
                 )
                 conn.commit()
-            notify_user_by_name_or_username(assigned_to, "Task Assignment Updated", f"Your assigned task '{title}' for project '{project}' was updated.", url_for('my_tasks'))
-            flash('Task updated successfully.', 'success')
-            return redirect(url_for('task_management'))
+            notify_user_by_name_or_username(
+                assigned_to,
+                "Task Assignment Updated",
+                f"Your assigned task '{title}' for project '{project}' was updated.",
+                url_for("my_tasks"),
+            )
+            flash("Task updated successfully.", "success")
+            return redirect(url_for("task_management"))
 
         with get_db() as conn:
             conn.execute(
@@ -1380,13 +1503,18 @@ def task_management():
                     estimated_hours,
                     recurring_type,
                     status,
-                    current_user.username if status == 'Completed' else None,
+                    current_user.username if status == "Completed" else None,
                 ),
             )
             conn.commit()
-        notify_user_by_name_or_username(assigned_to, "New Task Assigned", f"You were assigned task '{title}' for project '{project}' (Deadline: {deadline}).", url_for('my_tasks'))
-        flash('Task created successfully.', 'success')
-        return redirect(url_for('task_management'))
+        notify_user_by_name_or_username(
+            assigned_to,
+            "New Task Assigned",
+            f"You were assigned task '{title}' for project '{project}' (Deadline: {deadline}).",
+            url_for("my_tasks"),
+        )
+        flash("Task created successfully.", "success")
+        return redirect(url_for("task_management"))
 
     query = """
         SELECT t.id, t.title, t.task_category, t.description, t.project, t.assigned_to, t.assigned_by, t.assigned_date, t.deadline,
@@ -1729,7 +1857,14 @@ def create_user():
                     temp_password = secrets.token_urlsafe(12)
                     cursor = conn.execute(
                         "INSERT INTO users (username, password_hash, role, full_name, email, force_password_change) VALUES (?, ?, ?, ?, ?, ?)",
-                        (username, generate_password_hash(temp_password), role, full_name, email, 1),
+                        (
+                            username,
+                            generate_password_hash(temp_password),
+                            role,
+                            full_name,
+                            email,
+                            1,
+                        ),
                     )
                     new_user_id = cursor.lastrowid
                     if role == "employee":
@@ -1738,12 +1873,19 @@ def create_user():
                             (new_user_id, full_name),
                         )
                     conn.commit()
-                    create_notification(new_user_id, "Welcome to HRMS", f"Hello {full_name}, your account (@{username}) has been created.", url_for('dashboard'))
-                    notify_admins("New User Account Created", f"Account created for {full_name} (@{username}) with role {role}.", url_for('admin_users'))
-                    send_welcome_email(email, full_name, username, temp_password)
-                    message = (
-                        f"User created successfully. Temporary password: {temp_password}"
+                    create_notification(
+                        new_user_id,
+                        "Welcome to HRMS",
+                        f"Hello {full_name}, your account (@{username}) has been created.",
+                        url_for("dashboard"),
                     )
+                    notify_admins(
+                        "New User Account Created",
+                        f"Account created for {full_name} (@{username}) with role {role}.",
+                        url_for("admin_users"),
+                    )
+                    send_welcome_email(email, full_name, username, temp_password)
+                    message = f"User created successfully. Temporary password: {temp_password}"
 
     return render_template_string(
         """
@@ -1802,10 +1944,10 @@ def create_user():
 
 
 # Attendance actions
-@app.route('/attendance/punch-in', methods=['POST'])
+@app.route("/attendance/punch-in", methods=["POST"])
 @login_required
 def punch_in():
-    today = datetime.date.today().isoformat()
+    today = datetime.date.today().isoformat()  # noqa: DTZ011  # Naive date check
     user_id = current_user.id
     username = current_user.username
     with get_db() as conn:
@@ -1813,14 +1955,14 @@ def punch_in():
             "SELECT id, punch_in_time FROM attendance WHERE user_id = ? AND date = ?",
             (user_id, today),
         ).fetchone()
-        if existing and existing['punch_in_time']:
-            flash('You have already punched in today.', 'warning')
-            return redirect(url_for('dashboard'))
-        now = datetime.datetime.now().isoformat()
+        if existing and existing["punch_in_time"]:
+            flash("You have already punched in today.", "warning")
+            return redirect(url_for("dashboard"))
+        now = datetime.datetime.now().isoformat()  # noqa: DTZ005  # Naive datetime for punch in
         if existing:
             conn.execute(
                 "UPDATE attendance SET punch_in_time = ? WHERE id = ?",
-                (now, existing['id']),
+                (now, existing["id"]),
             )
         else:
             conn.execute(
@@ -1828,45 +1970,55 @@ def punch_in():
                 (user_id, username, today, now),
             )
         conn.commit()
-    create_notification(current_user.id, "Attendance: Punched In", f"Punch-in recorded for today ({today}). Have a productive day!", url_for('dashboard'))
-    flash('Punch in recorded.', 'success')
-    return redirect(url_for('dashboard'))
+    create_notification(
+        current_user.id,
+        "Attendance: Punched In",
+        f"Punch-in recorded for today ({today}). Have a productive day!",
+        url_for("dashboard"),
+    )
+    flash("Punch in recorded.", "success")
+    return redirect(url_for("dashboard"))
 
 
-@app.route('/attendance/punch-out', methods=['POST'])
+@app.route("/attendance/punch-out", methods=["POST"])
 @login_required
 def punch_out():
-    today = datetime.date.today().isoformat()
+    today = datetime.date.today().isoformat()  # noqa: DTZ011  # Naive date check
     user_id = current_user.id
     with get_db() as conn:
         rec = conn.execute(
             "SELECT id, punch_in_time, punch_out_time FROM attendance WHERE user_id = ? AND date = ?",
             (user_id, today),
         ).fetchone()
-        if not rec or not rec['punch_in_time']:
-            flash('Cannot punch out before punching in.', 'danger')
-            return redirect(url_for('dashboard'))
-        if rec['punch_out_time']:
-            flash('You have already punched out today.', 'warning')
-            return redirect(url_for('dashboard'))
-        now = datetime.datetime.now().isoformat()
+        if not rec or not rec["punch_in_time"]:
+            flash("Cannot punch out before punching in.", "danger")
+            return redirect(url_for("dashboard"))
+        if rec["punch_out_time"]:
+            flash("You have already punched out today.", "warning")
+            return redirect(url_for("dashboard"))
+        now = datetime.datetime.now().isoformat()  # noqa: DTZ005  # Naive datetime for punch out
         # calculate total hours
         try:
-            t_in = datetime.datetime.fromisoformat(rec['punch_in_time'])
+            t_in = datetime.datetime.fromisoformat(rec["punch_in_time"])
             t_out = datetime.datetime.fromisoformat(now)
             delta = t_out - t_in
             total_hours = round(delta.total_seconds() / 3600, 2)
-        except Exception:
+        except Exception:  # noqa: BLE001  # Total hours calculation fallback
             total_hours = None
         conn.execute(
             "UPDATE attendance SET punch_out_time = ?, total_hours = ? WHERE id = ?",
-            (now, total_hours, rec['id']),
+            (now, total_hours, rec["id"]),
         )
         conn.commit()
     hrs_str = f" ({total_hours:.1f} hrs logged)" if total_hours is not None else ""
-    create_notification(current_user.id, "Attendance: Punched Out", f"Punch-out recorded for today ({today}){hrs_str}.", url_for('dashboard'))
-    flash('Punch out recorded.', 'success')
-    return redirect(url_for('dashboard'))
+    create_notification(
+        current_user.id,
+        "Attendance: Punched Out",
+        f"Punch-out recorded for today ({today}){hrs_str}.",
+        url_for("dashboard"),
+    )
+    flash("Punch out recorded.", "success")
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/logout")
@@ -1877,12 +2029,12 @@ def logout():
     return redirect(url_for("index"))
 
 
-@app.route('/admin/attendance')
+@app.route("/admin/attendance")
 @login_required
 def admin_attendance():
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
     with get_db() as conn:
         rows = conn.execute(
             "SELECT user_id, username, date, punch_in_time, punch_out_time, total_hours FROM attendance ORDER BY date DESC, username"
@@ -1940,12 +2092,12 @@ def admin_attendance():
     )
 
 
-@app.route('/admin/users')
+@app.route("/admin/users")
 @login_required
 def admin_users():
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
     with get_db() as conn:
         rows = conn.execute(
             "SELECT id, username, full_name, email, role, force_password_change FROM users ORDER BY username"
@@ -2041,37 +2193,39 @@ def admin_users():
     )
 
 
-@app.route('/admin/users/<int:user_id>/delete', methods=['POST'])
+@app.route("/admin/users/<int:user_id>/delete", methods=["POST"])
 @login_required
 def delete_user(user_id):
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
 
     if user_id == current_user.id:
-        flash('You cannot delete your own active admin account.', 'danger')
-        return redirect(url_for('admin_users'))
+        flash("You cannot delete your own active admin account.", "danger")
+        return redirect(url_for("admin_users"))
 
     with get_db() as conn:
-        u = conn.execute("SELECT id, username FROM users WHERE id = ?", (user_id,)).fetchone()
+        u = conn.execute(
+            "SELECT id, username FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
         if not u:
-            flash('User account not found.', 'warning')
-            return redirect(url_for('admin_users'))
+            flash("User account not found.", "warning")
+            return redirect(url_for("admin_users"))
 
-        username = u['username']
+        username = u["username"]
         conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         conn.commit()
 
-    flash(f"User account '@{username}' deleted successfully.", 'success')
-    return redirect(url_for('admin_users'))
+    flash(f"User account '@{username}' deleted successfully.", "success")
+    return redirect(url_for("admin_users"))
 
 
-@app.route('/admin/employees')
+@app.route("/admin/employees")
 @login_required
 def admin_employees():
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
     with get_db() as conn:
         rows = conn.execute(
             "SELECT id, name, department, salary FROM employees ORDER BY name"
@@ -2122,7 +2276,7 @@ def admin_employees():
                                     <tr>
                                         <td class="fw-bold">{{ r.name }}</td>
                                         <td>{{ r.department or '' }}</td>
-                                        <td>{{ r.salary or '' }}</td>
+                                        <td>{{ r.salary | inr if r.salary else 'N/A' }}</td>
                                         <td class="text-end">
                                             <div class="d-inline-flex gap-1">
                                                 <a class="btn btn-sm btn-primary" href="{{ url_for('view_employee', emp_id=r.id) }}">View</a>
@@ -2152,36 +2306,48 @@ def admin_employees():
     )
 
 
-@app.route('/admin/employees/add', methods=['GET', 'POST'])
+@app.route("/admin/employees/add", methods=["GET", "POST"])
 @login_required
 def add_employee():
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        return redirect(url_for('dashboard'))
-    if request.method == 'POST':
-        name = request.form.get('name', '').strip()
-        address = request.form.get('address', '').strip()
-        education = request.form.get('education', '').strip()
-        experience = request.form.get('experience', '').strip()
-        contact_number = request.form.get('contact_number', '').strip()
-        emergency_contact = request.form.get('emergency_contact', '').strip()
-        departments = request.form.getlist('department')
-        department = ','.join(departments)
-        salary = request.form.get('salary') or None
-        pan_file = request.files.get('pan')
-        aadhaar_file = request.files.get('aadhaar')
-        other_file = request.files.get('other')
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        address = request.form.get("address", "").strip()
+        education = request.form.get("education", "").strip()
+        experience = request.form.get("experience", "").strip()
+        contact_number = request.form.get("contact_number", "").strip()
+        emergency_contact = request.form.get("emergency_contact", "").strip()
+        departments = request.form.getlist("department")
+        department = ",".join(departments)
+        salary = request.form.get("salary") or None
+        pan_file = request.files.get("pan")
+        aadhaar_file = request.files.get("aadhaar")
+        other_file = request.files.get("other")
         pan_path = save_uploaded_file(pan_file)
         aadhaar_path = save_uploaded_file(aadhaar_file)
         other_path = save_uploaded_file(other_file)
         with get_db() as conn:
             conn.execute(
                 "INSERT INTO employees (name, address, education, experience, contact_number, emergency_contact, department, salary, pan_path, aadhaar_path, other_docs_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (name, address, education, experience, contact_number, emergency_contact, department, salary, pan_path, aadhaar_path, other_path),
+                (
+                    name,
+                    address,
+                    education,
+                    experience,
+                    contact_number,
+                    emergency_contact,
+                    department,
+                    salary,
+                    pan_path,
+                    aadhaar_path,
+                    other_path,
+                ),
             )
             conn.commit()
-        flash('Employee added.', 'success')
-        return redirect(url_for('admin_employees'))
+        flash("Employee added.", "success")
+        return redirect(url_for("admin_employees"))
     return render_template_string(
         """
         <!doctype html>
@@ -2258,19 +2424,19 @@ def add_employee():
     )
 
 
-@app.route('/admin/employees/<int:emp_id>')
+@app.route("/admin/employees/<int:emp_id>")
 @login_required
 def view_employee(emp_id):
-        if current_user.role != 'admin':
-            flash('Admin access required.', 'danger')
-            return redirect(url_for('dashboard'))
-        with get_db() as conn:
-            r = conn.execute('SELECT * FROM employees WHERE id = ?', (emp_id,)).fetchone()
-            if not r:
-                flash('Employee not found.', 'warning')
-                return redirect(url_for('admin_employees'))
-        return render_template_string(
-            """
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
+    with get_db() as conn:
+        r = conn.execute("SELECT * FROM employees WHERE id = ?", (emp_id,)).fetchone()
+        if not r:
+            flash("Employee not found.", "warning")
+            return redirect(url_for("admin_employees"))
+    return render_template_string(
+        """
             <!doctype html>
             <html lang="en">
             <head>
@@ -2293,7 +2459,7 @@ def view_employee(emp_id):
                             <p><strong>Experience:</strong> {{ r.experience }}</p>
                             <p><strong>Contact Number:</strong> {{ r.contact_number or '' }}</p>
                             <p><strong>Emergency Contact:</strong> {{ r.emergency_contact }}</p>
-                            <p><strong>Salary:</strong> {{ r.salary }}</p>
+                            <p><strong>Salary:</strong> {{ r.salary | inr if r.salary else 'N/A' }}</p>
                             <p><strong>PAN:</strong> {% if r.pan_path %}<a href="/{{ r.pan_path }}">Download</a>{% else %}N/A{% endif %}</p>
                             <p><strong>Aadhaar:</strong> {% if r.aadhaar_path %}<a href="/{{ r.aadhaar_path }}">Download</a>{% else %}N/A{% endif %}</p>
                             <p><strong>Other Docs:</strong> {% if r.other_docs_path %}<a href="/{{ r.other_docs_path }}">Download</a>{% else %}N/A{% endif %}</p>
@@ -2303,58 +2469,76 @@ def view_employee(emp_id):
             </body>
             </html>
             """,
-            r=r,
-        )
+        r=r,
+    )
 
 
-@app.route('/admin/employees/<int:emp_id>/edit', methods=['GET', 'POST'])
+@app.route("/admin/employees/<int:emp_id>/edit", methods=["GET", "POST"])
 @login_required
 def edit_employee(emp_id):
-        if current_user.role != 'admin':
-            flash('Admin access required.', 'danger')
-            return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
+    with get_db() as conn:
+        r = conn.execute("SELECT * FROM employees WHERE id = ?", (emp_id,)).fetchone()
+        if not r:
+            flash("Employee not found.", "warning")
+            return redirect(url_for("admin_employees"))
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        address = request.form.get("address", "").strip()
+        education = request.form.get("education", "").strip()
+        experience = request.form.get("experience", "").strip()
+        contact_number = request.form.get("contact_number", "").strip()
+        emergency_contact = request.form.get("emergency_contact", "").strip()
+        departments = request.form.getlist("department")
+        department = ",".join(departments)
+        salary = request.form.get("salary") or None
+        pan_file = request.files.get("pan")
+        aadhaar_file = request.files.get("aadhaar")
+        other_file = request.files.get("other")
+        pan_path = r["pan_path"]
+        aadhaar_path = r["aadhaar_path"]
+        other_path = r["other_docs_path"]
+        if pan_file and pan_file.filename:
+            pan_path = save_uploaded_file(pan_file)
+        if aadhaar_file and aadhaar_file.filename:
+            aadhaar_path = save_uploaded_file(aadhaar_file)
+        if other_file and other_file.filename:
+            other_path = save_uploaded_file(other_file)
         with get_db() as conn:
-            r = conn.execute('SELECT * FROM employees WHERE id = ?', (emp_id,)).fetchone()
-            if not r:
-                flash('Employee not found.', 'warning')
-                return redirect(url_for('admin_employees'))
-        if request.method == 'POST':
-            name = request.form.get('name', '').strip()
-            address = request.form.get('address', '').strip()
-            education = request.form.get('education', '').strip()
-            experience = request.form.get('experience', '').strip()
-            contact_number = request.form.get('contact_number', '').strip()
-            emergency_contact = request.form.get('emergency_contact', '').strip()
-            departments = request.form.getlist('department')
-            department = ','.join(departments)
-            salary = request.form.get('salary') or None
-            pan_file = request.files.get('pan')
-            aadhaar_file = request.files.get('aadhaar')
-            other_file = request.files.get('other')
-            pan_path = r['pan_path']
-            aadhaar_path = r['aadhaar_path']
-            other_path = r['other_docs_path']
-            if pan_file and pan_file.filename:
-                pan_path = save_uploaded_file(pan_file)
-            if aadhaar_file and aadhaar_file.filename:
-                aadhaar_path = save_uploaded_file(aadhaar_file)
-            if other_file and other_file.filename:
-                other_path = save_uploaded_file(other_file)
-            with get_db() as conn:
-                conn.execute(
-                    """
+            conn.execute(
+                """
                     UPDATE employees SET name=?, address=?, education=?, experience=?, contact_number=?, emergency_contact=?, department=?, salary=?, pan_path=?, aadhaar_path=?, other_docs_path=? WHERE id=?
                     """,
-                    (name, address, education, experience, contact_number, emergency_contact, department, salary, pan_path, aadhaar_path, other_path, emp_id),
-                )
-                conn.commit()
-            if r['user_id']:
-                create_notification(r['user_id'], "Employee Profile Updated", "Your employee records and profile documents were updated by administration.", url_for('dashboard'))
-            flash('Employee updated.', 'success')
-            return redirect(url_for('view_employee', emp_id=emp_id))
-        current_depts = (r['department'] or '').split(',') if r['department'] else []
-        return render_template_string(
-            """
+                (
+                    name,
+                    address,
+                    education,
+                    experience,
+                    contact_number,
+                    emergency_contact,
+                    department,
+                    salary,
+                    pan_path,
+                    aadhaar_path,
+                    other_path,
+                    emp_id,
+                ),
+            )
+            conn.commit()
+        if r["user_id"]:
+            create_notification(
+                r["user_id"],
+                "Employee Profile Updated",
+                "Your employee records and profile documents were updated by administration.",
+                url_for("dashboard"),
+            )
+        flash("Employee updated.", "success")
+        return redirect(url_for("view_employee", emp_id=emp_id))
+    current_depts = (r["department"] or "").split(",") if r["department"] else []
+    return render_template_string(
+        """
             <!doctype html>
             <html lang="en">
             <head>
@@ -2427,68 +2611,82 @@ def edit_employee(emp_id):
             </body>
             </html>
             """,
-            r=r,
-            current_depts=current_depts,
-        )
+        r=r,
+        current_depts=current_depts,
+    )
 
 
-@app.route('/admin/employees/<int:emp_id>/delete', methods=['POST'])
+@app.route("/admin/employees/<int:emp_id>/delete", methods=["POST"])
 @login_required
 def delete_employee(emp_id):
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
 
     with get_db() as conn:
-        r = conn.execute('SELECT * FROM employees WHERE id = ?', (emp_id,)).fetchone()
+        r = conn.execute("SELECT * FROM employees WHERE id = ?", (emp_id,)).fetchone()
         if not r:
-            flash('Employee not found.', 'warning')
-            return redirect(url_for('admin_employees'))
+            flash("Employee not found.", "warning")
+            return redirect(url_for("admin_employees"))
 
-        linked_user_id = r['user_id'] if 'user_id' in r.keys() else None
-        employee_name = r['name']
+        linked_user_id = r["user_id"] if "user_id" in r else None
+        employee_name = r["name"]
 
         # Prevent active admin self-deletion
         if linked_user_id and linked_user_id == current_user.id:
-            flash('You cannot delete your own active admin account.', 'danger')
-            return redirect(url_for('admin_employees'))
+            flash("You cannot delete your own active admin account.", "danger")
+            return redirect(url_for("admin_employees"))
 
         # Remove physical upload files
-        for p in (r['pan_path'], r['aadhaar_path'], r['other_docs_path']):
+        for p in (r["pan_path"], r["aadhaar_path"], r["other_docs_path"]):
             try:
                 if p and os.path.exists(p):
                     os.remove(p)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110  # Best-effort file removal without interrupting DB deletion
                 pass
 
         if linked_user_id:
             # Delete dependent records linked by user_id
-            conn.execute('DELETE FROM attendance WHERE user_id = ?', (linked_user_id,))
-            conn.execute('DELETE FROM leave_requests WHERE user_id = ?', (linked_user_id,))
-            conn.execute('DELETE FROM performance_reviews WHERE employee_user_id = ?', (linked_user_id,))
-            conn.execute('DELETE FROM time_logs WHERE user_id = ?', (linked_user_id,))
-            conn.execute('DELETE FROM users WHERE id = ?', (linked_user_id,))
+            conn.execute("DELETE FROM attendance WHERE user_id = ?", (linked_user_id,))
+            conn.execute(
+                "DELETE FROM leave_requests WHERE user_id = ?", (linked_user_id,)
+            )
+            conn.execute(
+                "DELETE FROM performance_reviews WHERE employee_user_id = ?",
+                (linked_user_id,),
+            )
+            conn.execute("DELETE FROM time_logs WHERE user_id = ?", (linked_user_id,))
+            conn.execute("DELETE FROM users WHERE id = ?", (linked_user_id,))
 
         # Update tasks assigned to this employee to 'Unassigned'
-        conn.execute('UPDATE tasks SET assigned_to = ? WHERE assigned_to = ?', ('Unassigned', employee_name))
+        conn.execute(
+            "UPDATE tasks SET assigned_to = ? WHERE assigned_to = ?",
+            ("Unassigned", employee_name),
+        )
 
         # Delete employee record
-        conn.execute('DELETE FROM employees WHERE id = ?', (emp_id,))
+        conn.execute("DELETE FROM employees WHERE id = ?", (emp_id,))
         conn.commit()
 
-    flash(f"Employee '{employee_name}' and all associated user records deleted successfully.", 'success')
-    return redirect(url_for('admin_employees'))
+    flash(
+        f"Employee '{employee_name}' and all associated user records deleted successfully.",
+        "success",
+    )
+    return redirect(url_for("admin_employees"))
 
 
-@app.route('/admin/clients')
+@app.route("/admin/clients")
 @login_required
 def admin_clients():
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
     with get_db() as conn:
-        clients = conn.execute('SELECT * FROM clients ORDER BY lower(name), id').fetchall()
-    return render_template_string("""
+        clients = conn.execute(
+            "SELECT * FROM clients ORDER BY lower(name), id"
+        ).fetchall()
+    return render_template_string(
+        """
         <!doctype html>
         <html lang="en">
         <head>
@@ -2501,11 +2699,14 @@ def admin_clients():
         <div class="container py-5"><div class="d-flex align-items-center mb-3"><a class="btn btn-outline-secondary me-3" href="{{ url_for('dashboard') }}">Back</a><h1 class="h3 me-auto mb-0">Client Management</h1><a class="btn btn-success" href="{{ url_for('add_client') }}">Add New Client</a></div><div class="card shadow-sm"><div class="card-body"><div class="table-responsive"><table class="table table-striped align-middle mb-0"><thead><tr><th>Client Name</th><th>City</th><th>Services</th><th>Contact</th><th>Actions</th></tr></thead><tbody>{% for client in clients %}<tr><td>{{ client.name }}</td><td>{{ client.city or '' }}</td><td>{{ client.services or '' }}</td><td>{{ client.contact_number or '' }}</td><td><a class="btn btn-sm btn-primary" href="{{ url_for('edit_client', client_id=client.id) }}">View</a><a class="btn btn-sm btn-secondary" href="{{ url_for('edit_client', client_id=client.id) }}">Edit</a><form method="post" action="{{ url_for('delete_client', client_id=client.id) }}" class="d-inline"><button class="btn btn-sm btn-danger">Delete</button></form></td></tr>{% else %}<tr><td colspan="5"><div class="alert alert-info mb-0">No clients found.</div></td></tr>{% endfor %}</tbody></table></div></div></div></div>
         </body>
         </html>
-    """, clients=clients)
+    """,
+        clients=clients,
+    )
 
 
 def render_client_form(client=None):
-    return render_template_string("""
+    return render_template_string(
+        """
         <!doctype html>
         <html lang="en">
         <head>
@@ -2518,57 +2719,99 @@ def render_client_form(client=None):
         <div class="container py-5"><div class="row justify-content-center"><div class="col-lg-9"><div class="card shadow-sm"><div class="card-body"><div class="d-flex align-items-center mb-3"><a class="btn btn-outline-secondary me-3" href="{{ url_for('admin_clients') }}">Back</a><h1 class="h3 mb-0">{{ 'Edit Client' if client else 'Add New Client' }}</h1></div><form method="post"><div class="row"><div class="col-md-6 mb-3"><label class="form-label">Client Name</label><input class="form-control" name="name" value="{{ client.name if client else '' }}" required></div><div class="col-md-6 mb-3"><label class="form-label">City</label><input class="form-control" name="city" value="{{ client.city if client else '' }}"></div><div class="col-12 mb-3"><label class="form-label">Client Address</label><textarea class="form-control" name="address" rows="3">{{ client.address if client else '' }}</textarea></div><div class="col-md-6 mb-3"><label class="form-label">Services</label><input class="form-control" name="services" value="{{ client.services if client else '' }}"></div><div class="col-md-6 mb-3"><label class="form-label">GST Number</label><input class="form-control" name="gst_number" value="{{ client.gst_number if client else '' }}"></div><div class="col-md-6 mb-3"><label class="form-label">Contact Number</label><input class="form-control" name="contact_number" value="{{ client.contact_number if client else '' }}"></div><div class="col-md-6 mb-3"><label class="form-label">Email</label><input class="form-control" type="email" name="email" value="{{ client.email if client else '' }}"></div></div><button class="btn btn-primary" type="submit">Save Client</button><a class="btn btn-outline-secondary ms-2" href="{{ url_for('admin_clients') }}">Cancel</a></form></div></div></div></div></div>
         </body>
         </html>
-    """, client=client)
+    """,
+        client=client,
+    )
 
 
-@app.route('/admin/clients/add', methods=['GET', 'POST'])
+@app.route("/admin/clients/add", methods=["GET", "POST"])
 @login_required
 def add_client():
-    if current_user.role != 'admin': return redirect(url_for('dashboard'))
-    if request.method == 'POST':
-        values = [request.form.get(key, '').strip() for key in ('name', 'address', 'city', 'services', 'gst_number', 'contact_number', 'email')]
-        if not values[0]: flash('Client Name is required.', 'danger'); return render_client_form()
-        with get_db() as conn: conn.execute('INSERT INTO clients (name, address, city, services, gst_number, contact_number, email) VALUES (?, ?, ?, ?, ?, ?, ?)', values)
-        return redirect(url_for('admin_clients'))
+    if current_user.role != "admin":
+        return redirect(url_for("dashboard"))
+    if request.method == "POST":
+        values = [
+            request.form.get(key, "").strip()
+            for key in (
+                "name",
+                "address",
+                "city",
+                "services",
+                "gst_number",
+                "contact_number",
+                "email",
+            )
+        ]
+        if not values[0]:
+            flash("Client Name is required.", "danger")
+            return render_client_form()
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO clients (name, address, city, services, gst_number, contact_number, email) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                values,
+            )
+        return redirect(url_for("admin_clients"))
     return render_client_form()
 
 
-@app.route('/admin/clients/<int:client_id>', methods=['GET', 'POST'])
-@app.route('/admin/clients/<int:client_id>/edit', methods=['GET', 'POST'])
+@app.route("/admin/clients/<int:client_id>", methods=["GET", "POST"])
+@app.route("/admin/clients/<int:client_id>/edit", methods=["GET", "POST"])
 @login_required
 def edit_client(client_id):
-    if current_user.role != 'admin': return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        return redirect(url_for("dashboard"))
     with get_db() as conn:
-        client = conn.execute('SELECT * FROM clients WHERE id = ?', (client_id,)).fetchone()
-        if client is None: flash('Client not found.', 'warning'); return redirect(url_for('admin_clients'))
-        if request.method == 'POST':
-            values = [request.form.get(key, '').strip() for key in ('name', 'address', 'city', 'services', 'gst_number', 'contact_number', 'email')]
-            if not values[0]: flash('Client Name is required.', 'danger'); return render_client_form(client)
-            conn.execute('UPDATE clients SET name=?, address=?, city=?, services=?, gst_number=?, contact_number=?, email=? WHERE id=?', (*values, client_id))
-            return redirect(url_for('admin_clients'))
+        client = conn.execute(
+            "SELECT * FROM clients WHERE id = ?", (client_id,)
+        ).fetchone()
+        if client is None:
+            flash("Client not found.", "warning")
+            return redirect(url_for("admin_clients"))
+        if request.method == "POST":
+            values = [
+                request.form.get(key, "").strip()
+                for key in (
+                    "name",
+                    "address",
+                    "city",
+                    "services",
+                    "gst_number",
+                    "contact_number",
+                    "email",
+                )
+            ]
+            if not values[0]:
+                flash("Client Name is required.", "danger")
+                return render_client_form(client)
+            conn.execute(
+                "UPDATE clients SET name=?, address=?, city=?, services=?, gst_number=?, contact_number=?, email=? WHERE id=?",
+                (*values, client_id),
+            )
+            return redirect(url_for("admin_clients"))
     return render_client_form(client)
 
 
-@app.route('/admin/clients/<int:client_id>/delete', methods=['POST'])
+@app.route("/admin/clients/<int:client_id>/delete", methods=["POST"])
 @login_required
 def delete_client(client_id):
-    if current_user.role != 'admin': return redirect(url_for('dashboard'))
-    with get_db() as conn: conn.execute('DELETE FROM clients WHERE id = ?', (client_id,))
-    return redirect(url_for('admin_clients'))
+    if current_user.role != "admin":
+        return redirect(url_for("dashboard"))
+    with get_db() as conn:
+        conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+    return redirect(url_for("admin_clients"))
 
 
-@app.route('/admin/projects')
+@app.route("/admin/projects")
 @login_required
 def admin_projects():
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
 
-    search = (request.args.get('search') or '').strip()
-    service_filter = (request.args.get('service_filter') or 'All').strip()
-    page = request.args.get('page', 1, type=int)
-    if page < 1:
-        page = 1
+    search = (request.args.get("search") or "").strip()
+    service_filter = (request.args.get("service_filter") or "All").strip()
+    page = request.args.get("page", 1, type=int)
+    page = max(page, 1)
 
     per_page = 10
     query = """
@@ -2591,7 +2834,7 @@ def admin_projects():
         """
         params.extend([search_term, search_term, search_term, search_term])
 
-    if service_filter != 'All':
+    if service_filter != "All":
         query += " AND lower(services) LIKE ?"
         params.append(f"%{service_filter.lower()}%")
 
@@ -2602,11 +2845,10 @@ def admin_projects():
 
     total_projects = len(all_projects)
     total_pages = max(1, (total_projects + per_page - 1) // per_page)
-    if page > total_pages:
-        page = total_pages
+    page = min(page, total_pages)
 
     start = (page - 1) * per_page
-    projects = all_projects[start:start + per_page]
+    projects = all_projects[start : start + per_page]
 
     return render_template_string(
         """
@@ -2730,183 +2972,125 @@ def admin_projects():
 
 
 def render_project_form(project=None, clients=None, employees=None):
-    return render_template_string("""
+    return render_template_string(
+        """
         <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{ 'Edit Project' if project else 'Add Project' }}</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light"><div class="container py-5"><div class="card shadow-sm mx-auto" style="max-width: 900px;"><div class="card-body"><div class="d-flex align-items-center mb-3"><a class="btn btn-outline-secondary me-3" href="{{ url_for('admin_projects') }}">Back</a><h1 class="h3 mb-0">{{ 'Edit Project' if project else 'Add Project' }}</h1></div><form method="post"><div class="mb-3"><label class="form-label">Client</label><select class="form-select" name="client_id" required><option value="">Select client</option>{% for client in clients %}<option value="{{ client.id }}" {% if project and client.id == project.client_id %}selected{% endif %}>{{ client.name }}</option>{% endfor %}</select></div><div class="mb-3"><label class="form-label">Services</label><br>{% for service in ['Social Media', 'SEO', 'Meta Ads', 'Google Ads', 'Website Development'] %}<label class="form-check form-check-inline"><input class="form-check-input" type="checkbox" name="services" value="{{ service }}" {% if project and service in current_services %}checked{% endif %}> {{ service }}</label>{% endfor %}</div><div class="mb-3"><label class="form-label">Assigned To</label><select class="form-select" name="assigned_to" required><option value="">Select employee</option>{% for employee in employees %}<option value="{{ employee.name }}" {% if project and employee.name == project.assigned_to %}selected{% endif %}>{{ employee.name }}</option>{% endfor %}</select></div><div class="mb-3"><label class="form-label">Delivery Details</label><textarea class="form-control" name="delivery_details" rows="3" required>{{ project.delivery_details if project else '' }}</textarea></div><button class="btn btn-primary" type="submit">{{ 'Save Changes' if project else 'Save Project' }}</button></form></div></div></div></body></html>
-    """, project=project, clients=clients, employees=employees,
-        current_services=(project['services'] or '').split(',') if project else [])
+    """,
+        project=project,
+        clients=clients,
+        employees=employees,
+        current_services=(project["services"] or "").split(",") if project else [],
+    )
 
 
-@app.route('/admin/projects/add', methods=['GET', 'POST'])
+@app.route("/admin/projects/add", methods=["GET", "POST"])
 @login_required
 def add_project():
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
     with get_db() as conn:
-        clients = conn.execute('SELECT id, name FROM clients ORDER BY lower(name), id').fetchall()
-        employees = conn.execute('SELECT id, name FROM employees ORDER BY name').fetchall()
-        if request.method == 'GET':
+        clients = conn.execute(
+            "SELECT id, name FROM clients ORDER BY lower(name), id"
+        ).fetchall()
+        employees = conn.execute(
+            "SELECT id, name FROM employees ORDER BY name"
+        ).fetchall()
+        if request.method == "GET":
             return render_project_form(None, clients, employees)
-        if request.method == 'POST':
-            client_id = request.form.get('client_id', type=int)
-            services = request.form.getlist('services')
-            assigned_to = request.form.get('assigned_to', '').strip()
-            delivery_details = request.form.get('delivery_details', '').strip()
+        if request.method == "POST":
+            client_id = request.form.get("client_id", type=int)
+            services = request.form.getlist("services")
+            assigned_to = request.form.get("assigned_to", "").strip()
+            delivery_details = request.form.get("delivery_details", "").strip()
             if not client_id or not services or not assigned_to or not delivery_details:
-                flash('All fields are required.', 'danger')
+                flash("All fields are required.", "danger")
                 return render_project_form(None, clients, employees)
-            conn.execute('INSERT INTO projects (client_id, services, assigned_to, delivery_details) VALUES (?, ?, ?, ?)', (client_id, ','.join(services), assigned_to, delivery_details))
+            conn.execute(
+                "INSERT INTO projects (client_id, services, assigned_to, delivery_details) VALUES (?, ?, ?, ?)",
+                (client_id, ",".join(services), assigned_to, delivery_details),
+            )
             conn.commit()
-    flash('Project created successfully.', 'success')
-    return redirect(url_for('admin_projects'))
+    flash("Project created successfully.", "success")
+    return redirect(url_for("admin_projects"))
 
 
-@app.route('/admin/projects/<int:project_id>/edit', methods=['GET', 'POST'])
+@app.route("/admin/projects/<int:project_id>/edit", methods=["GET", "POST"])
 @login_required
 def edit_project(project_id):
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
     with get_db() as conn:
-        project = conn.execute('SELECT * FROM projects WHERE id = ?', (project_id,)).fetchone()
+        project = conn.execute(
+            "SELECT * FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
         if project is None:
-            flash('Project not found.', 'warning')
-            return redirect(url_for('admin_projects'))
-        clients = conn.execute('SELECT id, name FROM clients ORDER BY lower(name), id').fetchall()
-        employees = conn.execute('SELECT id, name FROM employees ORDER BY name').fetchall()
-        if request.method == 'POST':
-            client_id = request.form.get('client_id', type=int)
-            services = request.form.getlist('services')
-            assigned_to = request.form.get('assigned_to', '').strip()
-            delivery_details = request.form.get('delivery_details', '').strip()
+            flash("Project not found.", "warning")
+            return redirect(url_for("admin_projects"))
+        clients = conn.execute(
+            "SELECT id, name FROM clients ORDER BY lower(name), id"
+        ).fetchall()
+        employees = conn.execute(
+            "SELECT id, name FROM employees ORDER BY name"
+        ).fetchall()
+        if request.method == "POST":
+            client_id = request.form.get("client_id", type=int)
+            services = request.form.getlist("services")
+            assigned_to = request.form.get("assigned_to", "").strip()
+            delivery_details = request.form.get("delivery_details", "").strip()
             if not client_id or not services or not assigned_to or not delivery_details:
-                flash('All fields are required.', 'danger')
+                flash("All fields are required.", "danger")
                 return render_project_form(project, clients, employees)
-            conn.execute('UPDATE projects SET client_id=?, services=?, assigned_to=?, delivery_details=? WHERE id=?', (client_id, ','.join(services), assigned_to, delivery_details, project_id))
+            conn.execute(
+                "UPDATE projects SET client_id=?, services=?, assigned_to=?, delivery_details=? WHERE id=?",
+                (
+                    client_id,
+                    ",".join(services),
+                    assigned_to,
+                    delivery_details,
+                    project_id,
+                ),
+            )
             conn.commit()
-            flash('Project updated successfully.', 'success')
-            return redirect(url_for('admin_projects'))
+            flash("Project updated successfully.", "success")
+            return redirect(url_for("admin_projects"))
     return render_project_form(project, clients, employees)
 
 
-@app.route('/admin/projects/add/legacy', methods=['GET', 'POST'])
+@app.route("/admin/projects/add/legacy", methods=["GET", "POST"])
 @login_required
 def legacy_add_project():
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
 
     with get_db() as conn:
-        employees = conn.execute("SELECT id, name FROM employees ORDER BY name").fetchall()
-        clients = conn.execute("SELECT id, name FROM clients ORDER BY lower(name), id").fetchall()
+        employees = conn.execute(
+            "SELECT id, name FROM employees ORDER BY name"
+        ).fetchall()
+        clients = conn.execute(
+            "SELECT id, name FROM clients ORDER BY lower(name), id"
+        ).fetchall()
 
-    if request.method == 'POST':
-        client_id = request.form.get('client_id', type=int)
-        services = request.form.getlist('services')
-        assigned_to = request.form.get('assigned_to', '').strip()
-        delivery_details = request.form.get('delivery_details', '').strip()
+    if request.method == "POST":
+        client_id = request.form.get("client_id", type=int)
+        services = request.form.getlist("services")
+        assigned_to = request.form.get("assigned_to", "").strip()
+        delivery_details = request.form.get("delivery_details", "").strip()
 
         required_fields = [
-            ('Client', client_id),
-            ('Services', services),
-            ('Assigned To', assigned_to),
-            ('Delivery Details', delivery_details),
+            ("Client", client_id),
+            ("Services", services),
+            ("Assigned To", assigned_to),
+            ("Delivery Details", delivery_details),
         ]
         if any(not value for _, value in required_fields):
-            flash('All fields are required.', 'danger')
-            return redirect(url_for('add_project'))
-            return render_template_string(
-                """
-                <!doctype html>
-                <html lang="en">
-                <head>
-                    <meta charset="utf-8">
-                    <meta name="viewport" content="width=device-width, initial-scale=1">
-                    <title>Add Project</title>
-                    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-                </head>
-                <body class="bg-light">
-                    <div class="container py-5">
-                        <div class="card shadow-sm mx-auto" style="max-width: 900px;">
-                            <div class="card-body">
-                                <div class="d-flex align-items-center mb-3">
-                                    <a class="btn btn-outline-secondary me-3" href="{{ url_for('admin_projects') }}">Back</a>
-                                    <h1 class="h3 mb-0">Add Project</h1>
-                                </div>
-                                {% with messages = get_flashed_messages(with_categories=true) %}
-                                    {% if messages %}
-                                        {% for category, message in messages %}
-                                            <div class="alert alert-{{ category }}">{{ message }}</div>
-                                        {% endfor %}
-                                    {% endif %}
-                                {% endwith %}
-                                <form method="post">
-                                    <div class="mb-3">
-                                        <label class="form-label">Client Name</label>
-                                        <input class="form-control" name="client_name" value="{{ client_name }}" required>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Services</label><br>
-                                        <label class="form-check form-check-inline"><input class="form-check-input" type="checkbox" name="services" value="Social Media" {% if 'Social Media' in services %}checked{% endif %}> Social Media</label>
-                                        <label class="form-check form-check-inline"><input class="form-check-input" type="checkbox" name="services" value="SEO" {% if 'SEO' in services %}checked{% endif %}> SEO</label>
-                                        <label class="form-check form-check-inline"><input class="form-check-input" type="checkbox" name="services" value="Meta Ads" {% if 'Meta Ads' in services %}checked{% endif %}> Meta Ads</label>
-                                        <label class="form-check form-check-inline"><input class="form-check-input" type="checkbox" name="services" value="Google Ads" {% if 'Google Ads' in services %}checked{% endif %}> Google Ads</label>
-                                        <label class="form-check form-check-inline"><input class="form-check-input" type="checkbox" name="services" value="Website Development" {% if 'Website Development' in services %}checked{% endif %}> Website Development</label>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Assigned To</label>
-                                        <select class="form-select" name="assigned_to" required>
-                                            <option value="">Select employee</option>
-                                            {% for employee in employees %}
-                                                <option value="{{ employee.name }}" {% if employee.name == assigned_to %}selected{% endif %}>{{ employee.name }}</option>
-                                            {% endfor %}
-                                        </select>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Delivery Details</label>
-                                        <textarea class="form-control" name="delivery_details" rows="3" required>{{ delivery_details }}</textarea>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Client WhatsApp Number</label>
-                                        <input class="form-control" name="whatsapp_number" value="{{ whatsapp_number }}" required>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Client Email</label>
-                                        <input class="form-control" type="email" name="client_email" value="{{ client_email }}" required>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Client Website</label>
-                                        <input class="form-control" name="client_website" value="{{ client_website }}" required>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Client Address</label>
-                                        <textarea class="form-control" name="client_address" rows="2" required>{{ client_address }}</textarea>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label">Client GST Number</label>
-                                        <input class="form-control" name="client_gst_number" value="{{ client_gst_number }}" required>
-                                    </div>
-                                    <button class="btn btn-primary" type="submit">Save Project</button>
-                                </form>
-                            </div>
-                        </div>
-                    </div>
-                </body>
-                </html>
-                """,
-                client_name=client_name,
-                services=services,
-                assigned_to=assigned_to,
-                delivery_details=delivery_details,
-                whatsapp_number=whatsapp_number,
-                client_email=client_email,
-                client_website=client_website,
-                client_address=client_address,
-                client_gst_number=client_gst_number,
-                employees=employees,
-            )
+            flash("All fields are required.", "danger")
+            return redirect(url_for("legacy_add_project"))
 
-        services_text = ','.join(services)
+
+        services_text = ",".join(services)
         with get_db() as conn:
             conn.execute(
                 """
@@ -2926,9 +3110,14 @@ def legacy_add_project():
             )
             conn.commit()
 
-        notify_user_by_name_or_username(assigned_to, "Assigned to New Project", f"You have been assigned to project for client.", url_for('dashboard'))
-        flash('Project created successfully.', 'success')
-        return redirect(url_for('admin_projects'))
+        notify_user_by_name_or_username(
+            assigned_to,
+            "Assigned to New Project",
+            "You have been assigned to project for client.",
+            url_for("dashboard"),
+        )
+        flash("Project created successfully.", "success")
+        return redirect(url_for("admin_projects"))
 
     return render_template_string(
         """
@@ -2978,26 +3167,6 @@ def legacy_add_project():
                                 <label class="form-label">Delivery Details</label>
                                 <textarea class="form-control" name="delivery_details" rows="3" required></textarea>
                             </div>
-                            {% if false %}<div class="mb-3">
-                                <label class="form-label">Client WhatsApp Number</label>
-                                <input class="form-control" name="whatsapp_number" required>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Client Email</label>
-                                <input class="form-control" type="email" name="client_email" required>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Client Website</label>
-                                <input class="form-control" name="client_website" required>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Client Address</label>
-                                <textarea class="form-control" name="client_address" rows="2" required></textarea>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Client GST Number</label>
-                                <input class="form-control" name="client_gst_number" required>
-                            </div>{% endif %}
                             <button class="btn btn-primary" type="submit">Save Project</button>
                             <a class="btn btn-outline-secondary ms-2" href="{{ url_for('admin_projects') }}">Back</a>
                         </form>
@@ -3012,17 +3181,20 @@ def legacy_add_project():
     )
 
 
-@app.route('/admin/projects/<int:project_id>')
+@app.route("/admin/projects/<int:project_id>")
 @login_required
 def view_project(project_id):
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
     with get_db() as conn:
-        project = conn.execute("SELECT projects.*, clients.name AS linked_client_name, clients.address AS linked_client_address, clients.city AS linked_client_city, clients.email AS linked_client_email, clients.contact_number AS linked_client_contact FROM projects LEFT JOIN clients ON clients.id = projects.client_id WHERE projects.id = ?", (project_id,)).fetchone()
+        project = conn.execute(
+            "SELECT projects.*, clients.name AS linked_client_name, clients.address AS linked_client_address, clients.city AS linked_client_city, clients.email AS linked_client_email, clients.contact_number AS linked_client_contact FROM projects LEFT JOIN clients ON clients.id = projects.client_id WHERE projects.id = ?",
+            (project_id,),
+        ).fetchone()
     if project is None:
-        flash('Project not found.', 'warning')
-        return redirect(url_for('admin_projects'))
+        flash("Project not found.", "warning")
+        return redirect(url_for("admin_projects"))
     return render_template_string(
         """
         <!doctype html>
@@ -3048,53 +3220,60 @@ def view_project(project_id):
             </div>
         </body>
         </html>
-        """, project=project
+        """,
+        project=project,
     )
 
 
-@app.route('/admin/projects/<int:project_id>/edit/legacy', methods=['GET', 'POST'])
+@app.route("/admin/projects/<int:project_id>/edit/legacy", methods=["GET", "POST"])
 @login_required
 def legacy_edit_project(project_id):
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
 
     with get_db() as conn:
         project = conn.execute(
             "SELECT * FROM projects WHERE id = ?",
             (project_id,),
         ).fetchone()
-        employees = conn.execute("SELECT id, name FROM employees ORDER BY name").fetchall()
-        clients = conn.execute("SELECT id, name FROM clients ORDER BY lower(name), id").fetchall()
+        employees = conn.execute(
+            "SELECT id, name FROM employees ORDER BY name"
+        ).fetchall()
+        clients = conn.execute(
+            "SELECT id, name FROM clients ORDER BY lower(name), id"
+        ).fetchall()
 
     if project is None:
-        flash('Project not found.', 'warning')
-        return redirect(url_for('admin_projects'))
+        flash("Project not found.", "warning")
+        return redirect(url_for("admin_projects"))
 
     current_services = []
-    if project['services']:
-        current_services = [item.strip() for item in str(project['services']).split(',') if item.strip()]
+    if project["services"]:
+        current_services = [
+            item.strip() for item in str(project["services"]).split(",") if item.strip()
+        ]
 
-    if request.method == 'POST':
-        client_id = request.form.get('client_id', type=int)
-        client_name = (request.form.get('client_name') or '').strip()
-        services = request.form.getlist('services')
-        assigned_to = (request.form.get('assigned_to') or '').strip()
-        delivery_details = (request.form.get('delivery_details') or '').strip()
-        whatsapp_number = (request.form.get('whatsapp_number') or '').strip()
-        client_email = (request.form.get('client_email') or '').strip()
-        client_website = (request.form.get('client_website') or '').strip()
-        client_address = (request.form.get('client_address') or '').strip()
-        client_gst_number = (request.form.get('client_gst_number') or '').strip()
+    if request.method == "POST":
+        client_id = request.form.get("client_id", type=int)
+        client_name = (request.form.get("client_name") or "").strip()
+        services = request.form.getlist("services")
+        assigned_to = (request.form.get("assigned_to") or "").strip()
+        delivery_details = (request.form.get("delivery_details") or "").strip()
+        whatsapp_number = (request.form.get("whatsapp_number") or "").strip()
+        client_email = (request.form.get("client_email") or "").strip()
+        client_website = (request.form.get("client_website") or "").strip()
+        client_address = (request.form.get("client_address") or "").strip()
+        client_gst_number = (request.form.get("client_gst_number") or "").strip()
 
         required_fields = [
-            ('Client', client_id),
-            ('Services', services),
-            ('Assigned To', assigned_to),
-            ('Delivery Details', delivery_details),
+            ("Client", client_id),
+            ("Services", services),
+            ("Assigned To", assigned_to),
+            ("Delivery Details", delivery_details),
         ]
         if any(not value for _, value in required_fields):
-            flash('All fields are required.', 'danger')
+            flash("All fields are required.", "danger")
             return render_template_string(
                 """
                 <!doctype html>
@@ -3184,7 +3363,7 @@ def legacy_edit_project(project_id):
                 employees=employees,
             )
 
-        services_text = ','.join(services)
+        services_text = ",".join(services)
         with get_db() as conn:
             conn.execute(
                 """
@@ -3206,8 +3385,8 @@ def legacy_edit_project(project_id):
             )
             conn.commit()
 
-        flash('Project updated successfully.', 'success')
-        return redirect(url_for('admin_projects'))
+        flash("Project updated successfully.", "success")
+        return redirect(url_for("admin_projects"))
 
     return render_template_string(
         """
@@ -3295,12 +3474,12 @@ def legacy_edit_project(project_id):
     )
 
 
-@app.route('/admin/projects/<int:project_id>/delete', methods=['GET', 'POST'])
+@app.route("/admin/projects/<int:project_id>/delete", methods=["GET", "POST"])
 @login_required
 def delete_project(project_id):
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
 
     with get_db() as conn:
         project = conn.execute(
@@ -3309,15 +3488,15 @@ def delete_project(project_id):
         ).fetchone()
 
     if project is None:
-        flash('Project not found.', 'warning')
-        return redirect(url_for('admin_projects'))
+        flash("Project not found.", "warning")
+        return redirect(url_for("admin_projects"))
 
-    if request.method == 'POST':
+    if request.method == "POST":
         with get_db() as conn:
-            conn.execute('DELETE FROM projects WHERE id = ?', (project_id,))
+            conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
             conn.commit()
-        flash('Project deleted successfully.', 'success')
-        return redirect(url_for('admin_projects'))
+        flash("Project deleted successfully.", "success")
+        return redirect(url_for("admin_projects"))
 
     return render_template_string(
         """
@@ -3353,12 +3532,12 @@ def delete_project(project_id):
     )
 
 
-@app.route('/admin/attendance/download')
+@app.route("/admin/attendance/download")
 @login_required
 def download_attendance():
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
     with get_db() as conn:
         rows = conn.execute(
             "SELECT username, date, punch_in_time, punch_out_time, total_hours FROM attendance ORDER BY date DESC, username"
@@ -3366,84 +3545,97 @@ def download_attendance():
     # Generate Excel file using openpyxl
     try:
         from openpyxl import Workbook
-    except Exception:
-        flash('openpyxl is not installed on the server.', 'danger')
-        return redirect(url_for('admin_attendance'))
+    except Exception:  # noqa: BLE001  # Catch import error or missing openpyxl dependency
+        flash("openpyxl is not installed on the server.", "danger")
+        return redirect(url_for("admin_attendance"))
 
     wb = Workbook()
     ws = wb.active
     assert ws is not None
-    ws.title = 'Attendance'
-    headers = ['Username', 'Date', 'Punch In', 'Punch Out', 'Total Hours']
+    ws.title = "Attendance"
+    headers = ["Username", "Date", "Punch In", "Punch Out", "Total Hours"]
     ws.append(headers)
     for r in rows:
-        ws.append([r['username'], r['date'], r['punch_in_time'], r['punch_out_time'], r['total_hours']])
+        ws.append(
+            [
+                r["username"],
+                r["date"],
+                r["punch_in_time"],
+                r["punch_out_time"],
+                r["total_hours"],
+            ]
+        )
 
     bio = io.BytesIO()
     wb.save(bio)
     bio.seek(0)
     payload = bio.getvalue()
     headers = {
-        'Content-Disposition': 'attachment; filename="attendance_report.xlsx"',
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Length': str(len(payload)),
+        "Content-Disposition": 'attachment; filename="attendance_report.xlsx"',
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Length": str(len(payload)),
     }
     return Response(payload, headers=headers)
 
 
 # Helper to retrieve employee display name
 def get_employee_name_for_user(conn, user_id, fallback_name):
-    emp = conn.execute("SELECT name FROM employees WHERE user_id = ?", (user_id,)).fetchone()
-    if emp and emp['name']:
-        return str(emp['name'])
-    usr = conn.execute("SELECT full_name FROM users WHERE id = ?", (user_id,)).fetchone()
-    if usr and usr['full_name']:
-        return str(usr['full_name'])
+    emp = conn.execute(
+        "SELECT name FROM employees WHERE user_id = ?", (user_id,)
+    ).fetchone()
+    if emp and emp["name"]:
+        return str(emp["name"])
+    usr = conn.execute(
+        "SELECT full_name FROM users WHERE id = ?", (user_id,)
+    ).fetchone()
+    if usr and usr["full_name"]:
+        return str(usr["full_name"])
     return str(fallback_name)
 
 
 # Leave Management Module Routes
 
-@app.route('/leave/apply', methods=['GET', 'POST'])
+
+@app.route("/leave/apply", methods=["GET", "POST"])
 @login_required
 def apply_leave():
-    if request.method == 'POST':
+    if request.method == "POST":
         # Accept form data or JSON body
         if request.is_json and request.json:
             data = request.json
-            leave_type = str(data.get('leave_type', '')).strip()
-            start_date_str = str(data.get('start_date', '')).strip()
-            end_date_str = str(data.get('end_date', '')).strip()
-            reason = str(data.get('reason', '')).strip()
+            leave_type = str(data.get("leave_type", "")).strip()
+            start_date_str = str(data.get("start_date", "")).strip()
+            end_date_str = str(data.get("end_date", "")).strip()
+            reason = str(data.get("reason", "")).strip()
         else:
-            leave_type = (request.form.get('leave_type') or '').strip()
-            start_date_str = (request.form.get('start_date') or '').strip()
-            end_date_str = (request.form.get('end_date') or '').strip()
-            reason = (request.form.get('reason') or '').strip()
+            leave_type = (request.form.get("leave_type") or "").strip()
+            start_date_str = (request.form.get("start_date") or "").strip()
+            end_date_str = (request.form.get("end_date") or "").strip()
+            reason = (request.form.get("reason") or "").strip()
 
         if not leave_type or not start_date_str or not end_date_str or not reason:
-            msg = 'All fields (leave_type, start_date, end_date, reason) are required.'
-            flash(msg, 'danger')
+            msg = "All fields (leave_type, start_date, end_date, reason) are required."
+            flash(msg, "danger")
             if request.is_json:
-                return jsonify({'status': 'error', 'message': msg}), 400
-            return redirect(url_for('apply_leave'))
+                return jsonify({"status": "error", "message": msg}), 400
+            return redirect(url_for("apply_leave"))
 
         try:
-            start_date = datetime.datetime.strptime(start_date_str, '%Y-%m-%d').date()
-            end_date = datetime.datetime.strptime(end_date_str, '%Y-%m-%d').date()
+            start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()  # noqa: DTZ007  # Date string parsing
+            end_date = datetime.datetime.strptime(end_date_str, "%Y-%m-%d").date()  # noqa: DTZ007  # Date string parsing
         except ValueError:
-            msg = 'Invalid date format. Use YYYY-MM-DD.'
-            flash(msg, 'danger')
+            msg = "Invalid date format. Use YYYY-MM-DD."
+            flash(msg, "danger")
             if request.is_json:
-                return jsonify({'status': 'error', 'message': msg}), 400
-            return redirect(url_for('apply_leave'))
+                return jsonify({"status": "error", "message": msg}), 400
+            return redirect(url_for("apply_leave"))
 
         if end_date < start_date:
-            msg = 'End date cannot be before start date.'
-            flash(msg, 'danger')
+            msg = "End date cannot be before start date."
+            flash(msg, "danger")
             if request.is_json:
-                return jsonify({'status': 'error', 'message': msg}), 400
-            return redirect(url_for('apply_leave'))
+                return jsonify({"status": "error", "message": msg}), 400
+            return redirect(url_for("apply_leave"))
 
         total_days = float((end_date - start_date).days + 1)
 
@@ -3457,11 +3649,11 @@ def apply_leave():
                 (current_user.id, leave_type, start_date_str, end_date_str),
             ).fetchone()
             if duplicate:
-                msg = 'An identical pending leave request already exists.'
-                flash(msg, 'danger')
+                msg = "An identical pending leave request already exists."
+                flash(msg, "danger")
                 if request.is_json:
-                    return jsonify({'status': 'error', 'message': msg}), 400
-                return redirect(url_for('apply_leave'))
+                    return jsonify({"status": "error", "message": msg}), 400
+                return redirect(url_for("apply_leave"))
 
             # Check overlapping pending or approved leave requests
             overlap = conn.execute(
@@ -3473,14 +3665,16 @@ def apply_leave():
                 (current_user.id, end_date_str, start_date_str),
             ).fetchone()
             if overlap:
-                msg = 'Your requested leave dates overlap with an existing pending or approved leave request.'
-                flash(msg, 'danger')
+                msg = "Your requested leave dates overlap with an existing pending or approved leave request."
+                flash(msg, "danger")
                 if request.is_json:
-                    return jsonify({'status': 'error', 'message': msg}), 400
-                return redirect(url_for('apply_leave'))
+                    return jsonify({"status": "error", "message": msg}), 400
+                return redirect(url_for("apply_leave"))
 
-            employee_name = get_employee_name_for_user(conn, current_user.id, current_user.username)
-            applied_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            employee_name = get_employee_name_for_user(
+                conn, current_user.id, current_user.username
+            )
+            applied_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # noqa: DTZ005  # Preserving naive datetime
 
             cursor = conn.execute(
                 """
@@ -3503,21 +3697,34 @@ def apply_leave():
             conn.commit()
             leave_id = cursor.lastrowid
 
-        notify_admins(f"New Leave Request ({leave_type})", f"{employee_name} applied for {total_days} day(s) of {leave_type}.", url_for('pending_leave_requests'))
-        msg = 'Leave request submitted successfully.'
-        flash(msg, 'success')
+        notify_admins(
+            f"New Leave Request ({leave_type})",
+            f"{employee_name} applied for {total_days} day(s) of {leave_type}.",
+            url_for("pending_leave_requests"),
+        )
+        msg = "Leave request submitted successfully."
+        flash(msg, "success")
         if request.is_json:
-            return jsonify({'status': 'success', 'message': msg, 'leave_id': leave_id})
-        return redirect(url_for('my_leave_requests'))
+            return jsonify({"status": "success", "message": msg, "leave_id": leave_id})
+        return redirect(url_for("my_leave_requests"))
 
-    valid_leave_types = ['Casual Leave', 'Sick Leave', 'Earned Leave', 'Unpaid Leave', 'Maternity Leave', 'Paternity Leave']
-    if request.is_json or request.headers.get('Accept') == 'application/json':
-        return jsonify({
-            'status': 'success',
-            'action': 'apply_leave',
-            'leave_types': valid_leave_types,
-            'message': 'Submit a POST request with leave_type, start_date, end_date, and reason to apply for leave.'
-        })
+    valid_leave_types = [
+        "Casual Leave",
+        "Sick Leave",
+        "Earned Leave",
+        "Unpaid Leave",
+        "Maternity Leave",
+        "Paternity Leave",
+    ]
+    if request.is_json or request.headers.get("Accept") == "application/json":
+        return jsonify(
+            {
+                "status": "success",
+                "action": "apply_leave",
+                "leave_types": valid_leave_types,
+                "message": "Submit a POST request with leave_type, start_date, end_date, and reason to apply for leave.",
+            }
+        )
     return render_template_string(
         """
         {% extends "base.html" %}
@@ -3589,7 +3796,7 @@ def apply_leave():
     )
 
 
-@app.route('/leave/my-requests', methods=['GET'])
+@app.route("/leave/my-requests", methods=["GET"])
 @login_required
 def my_leave_requests():
     with get_db() as conn:
@@ -3606,8 +3813,8 @@ def my_leave_requests():
         ).fetchall()
         requests_list = [dict(row) for row in rows]
 
-    if request.is_json or request.headers.get('Accept') == 'application/json':
-        return jsonify({'status': 'success', 'leave_requests': requests_list})
+    if request.is_json or request.headers.get("Accept") == "application/json":
+        return jsonify({"status": "success", "leave_requests": requests_list})
 
     return render_template_string(
         """
@@ -3708,7 +3915,7 @@ def my_leave_requests():
     )
 
 
-@app.route('/leave/cancel/<int:leave_id>', methods=['POST'])
+@app.route("/leave/cancel/<int:leave_id>", methods=["POST"])
 @login_required
 def cancel_leave(leave_id):
     with get_db() as conn:
@@ -3718,18 +3925,18 @@ def cancel_leave(leave_id):
         ).fetchone()
 
         if req is None:
-            msg = 'Leave request not found or access denied.'
-            flash(msg, 'danger')
+            msg = "Leave request not found or access denied."
+            flash(msg, "danger")
             if request.is_json:
-                return jsonify({'status': 'error', 'message': msg}), 404
-            return redirect(url_for('my_leave_requests'))
+                return jsonify({"status": "error", "message": msg}), 404
+            return redirect(url_for("my_leave_requests"))
 
-        if req['status'] != 'Pending':
-            msg = 'Only pending leave requests can be cancelled.'
-            flash(msg, 'warning')
+        if req["status"] != "Pending":
+            msg = "Only pending leave requests can be cancelled."
+            flash(msg, "warning")
             if request.is_json:
-                return jsonify({'status': 'error', 'message': msg}), 400
-            return redirect(url_for('my_leave_requests'))
+                return jsonify({"status": "error", "message": msg}), 400
+            return redirect(url_for("my_leave_requests"))
 
         conn.execute(
             "UPDATE leave_requests SET status = 'Cancelled' WHERE id = ?",
@@ -3737,23 +3944,26 @@ def cancel_leave(leave_id):
         )
         conn.commit()
 
-    msg = 'Leave request cancelled successfully.'
-    flash(msg, 'success')
+    msg = "Leave request cancelled successfully."
+    flash(msg, "success")
     if request.is_json:
-        return jsonify({'status': 'success', 'message': msg})
-    return redirect(url_for('my_leave_requests'))
+        return jsonify({"status": "success", "message": msg})
+    return redirect(url_for("my_leave_requests"))
 
 
-@app.route('/admin/leave/all', methods=['GET'])
+@app.route("/admin/leave/all", methods=["GET"])
 @login_required
 def view_all_leave_requests():
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        if request.is_json or request.headers.get('Accept') == 'application/json':
-            return jsonify({'status': 'error', 'message': 'Admin access required.'}), 403
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        if request.is_json or request.headers.get("Accept") == "application/json":
+            return (
+                jsonify({"status": "error", "message": "Admin access required."}),
+                403,
+            )
+        return redirect(url_for("dashboard"))
 
-    status_filter = (request.args.get('status') or 'All').strip()
+    status_filter = (request.args.get("status") or "All").strip()
     query = """
         SELECT id, user_id, employee_name, leave_type, start_date, end_date,
                total_days, reason, status, applied_date, approved_by, approval_date,
@@ -3762,7 +3972,7 @@ def view_all_leave_requests():
         WHERE 1 = 1
     """
     params = []
-    if status_filter != 'All':
+    if status_filter != "All":
         query += " AND status = ?"
         params.append(status_filter)
 
@@ -3772,8 +3982,14 @@ def view_all_leave_requests():
         rows = conn.execute(query, params).fetchall()
         requests_list = [dict(row) for row in rows]
 
-    if request.is_json or request.headers.get('Accept') == 'application/json':
-        return jsonify({'status': 'success', 'status_filter': status_filter, 'leave_requests': requests_list})
+    if request.is_json or request.headers.get("Accept") == "application/json":
+        return jsonify(
+            {
+                "status": "success",
+                "status_filter": status_filter,
+                "leave_requests": requests_list,
+            }
+        )
 
     return render_template_string(
         """
@@ -3895,14 +4111,17 @@ def view_all_leave_requests():
     )
 
 
-@app.route('/admin/leave/pending', methods=['GET'])
+@app.route("/admin/leave/pending", methods=["GET"])
 @login_required
 def pending_leave_requests():
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
-        if request.is_json or request.headers.get('Accept') == 'application/json':
-            return jsonify({'status': 'error', 'message': 'Admin access required.'}), 403
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        if request.is_json or request.headers.get("Accept") == "application/json":
+            return (
+                jsonify({"status": "error", "message": "Admin access required."}),
+                403,
+            )
+        return redirect(url_for("dashboard"))
 
     with get_db() as conn:
         rows = conn.execute(
@@ -3917,8 +4136,8 @@ def pending_leave_requests():
         ).fetchall()
         requests_list = [dict(row) for row in rows]
 
-    if request.is_json or request.headers.get('Accept') == 'application/json':
-        return jsonify({'status': 'success', 'pending_requests': requests_list})
+    if request.is_json or request.headers.get("Accept") == "application/json":
+        return jsonify({"status": "success", "pending_requests": requests_list})
 
     return render_template_string(
         """
@@ -4056,19 +4275,22 @@ def pending_leave_requests():
     )
 
 
-@app.route('/admin/leave/<int:leave_id>/approve', methods=['POST'])
+@app.route("/admin/leave/<int:leave_id>/approve", methods=["POST"])
 @login_required
 def approve_leave(leave_id):
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
         if request.is_json:
-            return jsonify({'status': 'error', 'message': 'Admin access required.'}), 403
-        return redirect(url_for('dashboard'))
+            return (
+                jsonify({"status": "error", "message": "Admin access required."}),
+                403,
+            )
+        return redirect(url_for("dashboard"))
 
     if request.is_json and request.json:
-        comments = str(request.json.get('comments', '')).strip()
+        comments = str(request.json.get("comments", "")).strip()
     else:
-        comments = (request.form.get('comments') or '').strip()
+        comments = (request.form.get("comments") or "").strip()
 
     with get_db() as conn:
         req = conn.execute(
@@ -4077,20 +4299,20 @@ def approve_leave(leave_id):
         ).fetchone()
 
         if req is None:
-            msg = 'Leave request not found.'
-            flash(msg, 'danger')
+            msg = "Leave request not found."
+            flash(msg, "danger")
             if request.is_json:
-                return jsonify({'status': 'error', 'message': msg}), 404
-            return redirect(url_for('pending_leave_requests'))
+                return jsonify({"status": "error", "message": msg}), 404
+            return redirect(url_for("pending_leave_requests"))
 
-        if req['status'] != 'Pending':
+        if req["status"] != "Pending":
             msg = f"Cannot approve leave request with status '{req['status']}'."
-            flash(msg, 'warning')
+            flash(msg, "warning")
             if request.is_json:
-                return jsonify({'status': 'error', 'message': msg}), 400
-            return redirect(url_for('pending_leave_requests'))
+                return jsonify({"status": "error", "message": msg}), 400
+            return redirect(url_for("pending_leave_requests"))
 
-        approval_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        approval_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # noqa: DTZ005  # Preserving naive datetime
         conn.execute(
             """
             UPDATE leave_requests
@@ -4104,37 +4326,45 @@ def approve_leave(leave_id):
         )
         conn.commit()
 
-    create_notification(req['user_id'], "Leave Request Approved", f"Your {req['leave_type']} request ({req['start_date']} to {req['end_date']}) has been approved.", url_for('my_leave_requests'))
-    msg = 'Leave request approved successfully.'
-    flash(msg, 'success')
+    create_notification(
+        req["user_id"],
+        "Leave Request Approved",
+        f"Your {req['leave_type']} request ({req['start_date']} to {req['end_date']}) has been approved.",
+        url_for("my_leave_requests"),
+    )
+    msg = "Leave request approved successfully."
+    flash(msg, "success")
     if request.is_json:
-        return jsonify({'status': 'success', 'message': msg, 'leave_id': leave_id})
-    return redirect(url_for('pending_leave_requests'))
+        return jsonify({"status": "success", "message": msg, "leave_id": leave_id})
+    return redirect(url_for("pending_leave_requests"))
 
 
-@app.route('/admin/leave/<int:leave_id>/reject', methods=['POST'])
+@app.route("/admin/leave/<int:leave_id>/reject", methods=["POST"])
 @login_required
 def reject_leave(leave_id):
-    if current_user.role != 'admin':
-        flash('Admin access required.', 'danger')
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
         if request.is_json:
-            return jsonify({'status': 'error', 'message': 'Admin access required.'}), 403
-        return redirect(url_for('dashboard'))
+            return (
+                jsonify({"status": "error", "message": "Admin access required."}),
+                403,
+            )
+        return redirect(url_for("dashboard"))
 
     if request.is_json and request.json:
         data = request.json
-        rejection_reason = str(data.get('rejection_reason', '')).strip()
-        comments = str(data.get('comments', '')).strip()
+        rejection_reason = str(data.get("rejection_reason", "")).strip()
+        comments = str(data.get("comments", "")).strip()
     else:
-        rejection_reason = (request.form.get('rejection_reason') or '').strip()
-        comments = (request.form.get('comments') or '').strip()
+        rejection_reason = (request.form.get("rejection_reason") or "").strip()
+        comments = (request.form.get("comments") or "").strip()
 
     if not rejection_reason:
-        msg = 'Rejection reason is required.'
-        flash(msg, 'danger')
+        msg = "Rejection reason is required."
+        flash(msg, "danger")
         if request.is_json:
-            return jsonify({'status': 'error', 'message': msg}), 400
-        return redirect(url_for('pending_leave_requests'))
+            return jsonify({"status": "error", "message": msg}), 400
+        return redirect(url_for("pending_leave_requests"))
 
     with get_db() as conn:
         req = conn.execute(
@@ -4143,20 +4373,20 @@ def reject_leave(leave_id):
         ).fetchone()
 
         if req is None:
-            msg = 'Leave request not found.'
-            flash(msg, 'danger')
+            msg = "Leave request not found."
+            flash(msg, "danger")
             if request.is_json:
-                return jsonify({'status': 'error', 'message': msg}), 404
-            return redirect(url_for('pending_leave_requests'))
+                return jsonify({"status": "error", "message": msg}), 404
+            return redirect(url_for("pending_leave_requests"))
 
-        if req['status'] != 'Pending':
+        if req["status"] != "Pending":
             msg = f"Cannot reject leave request with status '{req['status']}'."
-            flash(msg, 'warning')
+            flash(msg, "warning")
             if request.is_json:
-                return jsonify({'status': 'error', 'message': msg}), 400
-            return redirect(url_for('pending_leave_requests'))
+                return jsonify({"status": "error", "message": msg}), 400
+            return redirect(url_for("pending_leave_requests"))
 
-        approval_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        approval_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # noqa: DTZ005  # Preserving naive datetime
         conn.execute(
             """
             UPDATE leave_requests
@@ -4167,27 +4397,46 @@ def reject_leave(leave_id):
                 comments = ?
             WHERE id = ?
             """,
-            (current_user.username, approval_date, rejection_reason, comments, leave_id),
+            (
+                current_user.username,
+                approval_date,
+                rejection_reason,
+                comments,
+                leave_id,
+            ),
         )
         conn.commit()
 
-    create_notification(req['user_id'], "Leave Request Rejected", f"Your {req['leave_type']} request ({req['start_date']} to {req['end_date']}) was rejected.", url_for('my_leave_requests'))
-    msg = 'Leave request rejected successfully.'
-    flash(msg, 'success')
+    create_notification(
+        req["user_id"],
+        "Leave Request Rejected",
+        f"Your {req['leave_type']} request ({req['start_date']} to {req['end_date']}) was rejected.",
+        url_for("my_leave_requests"),
+    )
+    msg = "Leave request rejected successfully."
+    flash(msg, "success")
     if request.is_json:
-        return jsonify({'status': 'success', 'message': msg, 'leave_id': leave_id})
-    return redirect(url_for('pending_leave_requests'))
+        return jsonify({"status": "success", "message": msg, "leave_id": leave_id})
+    return redirect(url_for("pending_leave_requests"))
 
 
 # Performance Management Module Routes
 
-@app.route('/performance')
+
+@app.route("/performance")
 @login_required
 def performance_dashboard():
     with get_db() as conn:
-        if current_user.role == 'admin':
-            total_reviews = conn.execute("SELECT COUNT(*) FROM performance_reviews").fetchone()[0]
-            avg_company_rating = conn.execute("SELECT AVG(overall_rating) FROM performance_reviews").fetchone()[0] or 0.0
+        if current_user.role == "admin":
+            total_reviews = conn.execute(
+                "SELECT COUNT(*) FROM performance_reviews"
+            ).fetchone()[0]
+            avg_company_rating = (
+                conn.execute(
+                    "SELECT AVG(overall_rating) FROM performance_reviews"
+                ).fetchone()[0]
+                or 0.0
+            )
 
             users_rows = conn.execute(
                 """
@@ -4204,10 +4453,18 @@ def performance_dashboard():
             employees_perf = [dict(row) for row in users_rows]
 
             # Rating distribution metrics for visual chart
-            dist_high = sum(1 for e in employees_perf if e['avg_rating'] and e['avg_rating'] >= 4.5)
-            dist_good = sum(1 for e in employees_perf if e['avg_rating'] and 3.5 <= e['avg_rating'] < 4.5)
-            dist_needs_work = sum(1 for e in employees_perf if e['avg_rating'] and e['avg_rating'] < 3.5)
-            dist_unrated = sum(1 for e in employees_perf if not e['avg_rating'])
+            dist_high = sum(
+                1 for e in employees_perf if e["avg_rating"] and e["avg_rating"] >= 4.5
+            )
+            dist_good = sum(
+                1
+                for e in employees_perf
+                if e["avg_rating"] and 3.5 <= e["avg_rating"] < 4.5
+            )
+            dist_needs_work = sum(
+                1 for e in employees_perf if e["avg_rating"] and e["avg_rating"] < 3.5
+            )
+            dist_unrated = sum(1 for e in employees_perf if not e["avg_rating"])
 
             return render_template_string(
                 """
@@ -4444,15 +4701,17 @@ def performance_dashboard():
                 dist_unrated=dist_unrated,
             )
         else:
-            return redirect(url_for('employee_performance_profile', user_id=current_user.id))
+            return redirect(
+                url_for("employee_performance_profile", user_id=current_user.id)
+            )
 
 
-@app.route('/performance/profile/<int:user_id>')
+@app.route("/performance/profile/<int:user_id>")
 @login_required
 def employee_performance_profile(user_id):
-    if current_user.role != 'admin' and current_user.id != user_id:
-        flash('Access denied.', 'danger')
-        return redirect(url_for('performance_dashboard'))
+    if current_user.role != "admin" and current_user.id != user_id:
+        flash("Access denied.", "danger")
+        return redirect(url_for("performance_dashboard"))
 
     with get_db() as conn:
         emp_user = conn.execute(
@@ -4461,8 +4720,8 @@ def employee_performance_profile(user_id):
         ).fetchone()
 
         if emp_user is None:
-            flash('Employee user not found.', 'danger')
-            return redirect(url_for('performance_dashboard'))
+            flash("Employee user not found.", "danger")
+            return redirect(url_for("performance_dashboard"))
 
         reviews_rows = conn.execute(
             """
@@ -4479,11 +4738,11 @@ def employee_performance_profile(user_id):
         reviews = [dict(row) for row in reviews_rows]
 
         if reviews:
-            avg_overall = sum(r['overall_rating'] for r in reviews) / len(reviews)
-            avg_tech = sum(r['technical_skills_score'] for r in reviews) / len(reviews)
-            avg_comm = sum(r['communication_score'] for r in reviews) / len(reviews)
-            avg_prod = sum(r['productivity_score'] for r in reviews) / len(reviews)
-            avg_team = sum(r['teamwork_score'] for r in reviews) / len(reviews)
+            avg_overall = sum(r["overall_rating"] for r in reviews) / len(reviews)
+            avg_tech = sum(r["technical_skills_score"] for r in reviews) / len(reviews)
+            avg_comm = sum(r["communication_score"] for r in reviews) / len(reviews)
+            avg_prod = sum(r["productivity_score"] for r in reviews) / len(reviews)
+            avg_team = sum(r["teamwork_score"] for r in reviews) / len(reviews)
         else:
             avg_overall = avg_tech = avg_comm = avg_prod = avg_team = 0.0
 
@@ -4694,12 +4953,12 @@ def employee_performance_profile(user_id):
     )
 
 
-@app.route('/performance/review/add/<int:user_id>', methods=['GET', 'POST'])
+@app.route("/performance/review/add/<int:user_id>", methods=["GET", "POST"])
 @login_required
 def add_performance_review(user_id):
-    if current_user.role != 'admin':
-        flash('Admin access required to add performance reviews.', 'danger')
-        return redirect(url_for('performance_dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required to add performance reviews.", "danger")
+        return redirect(url_for("performance_dashboard"))
 
     with get_db() as conn:
         emp_user = conn.execute(
@@ -4708,35 +4967,39 @@ def add_performance_review(user_id):
         ).fetchone()
 
         if emp_user is None:
-            flash('Employee user not found.', 'danger')
-            return redirect(url_for('performance_dashboard'))
+            flash("Employee user not found.", "danger")
+            return redirect(url_for("performance_dashboard"))
 
-    if request.method == 'POST':
-        review_period = (request.form.get('review_period') or '').strip()
-        strengths = (request.form.get('strengths') or '').strip()
-        areas_for_improvement = (request.form.get('areas_for_improvement') or '').strip()
-        comments = (request.form.get('comments') or '').strip()
+    if request.method == "POST":
+        review_period = (request.form.get("review_period") or "").strip()
+        strengths = (request.form.get("strengths") or "").strip()
+        areas_for_improvement = (
+            request.form.get("areas_for_improvement") or ""
+        ).strip()
+        comments = (request.form.get("comments") or "").strip()
 
         try:
-            overall_rating = float(request.form.get('overall_rating') or 0.0)
-            technical_skills_score = float(request.form.get('technical_skills_score') or 0.0)
-            communication_score = float(request.form.get('communication_score') or 0.0)
-            productivity_score = float(request.form.get('productivity_score') or 0.0)
-            teamwork_score = float(request.form.get('teamwork_score') or 0.0)
+            overall_rating = float(request.form.get("overall_rating") or 0.0)
+            technical_skills_score = float(
+                request.form.get("technical_skills_score") or 0.0
+            )
+            communication_score = float(request.form.get("communication_score") or 0.0)
+            productivity_score = float(request.form.get("productivity_score") or 0.0)
+            teamwork_score = float(request.form.get("teamwork_score") or 0.0)
         except ValueError:
-            flash('Scores must be valid numbers.', 'danger')
-            return redirect(url_for('add_performance_review', user_id=user_id))
+            flash("Scores must be valid numbers.", "danger")
+            return redirect(url_for("add_performance_review", user_id=user_id))
 
         if not review_period:
-            flash('Review period is required (e.g. Q1 2026).', 'danger')
-            return redirect(url_for('add_performance_review', user_id=user_id))
+            flash("Review period is required (e.g. Q1 2026).", "danger")
+            return redirect(url_for("add_performance_review", user_id=user_id))
 
         if not (1.0 <= overall_rating <= 5.0):
-            flash('Overall rating must be between 1.0 and 5.0.', 'danger')
-            return redirect(url_for('add_performance_review', user_id=user_id))
+            flash("Overall rating must be between 1.0 and 5.0.", "danger")
+            return redirect(url_for("add_performance_review", user_id=user_id))
 
-        employee_name = str(emp_user['full_name'] or emp_user['username'])
-        created_at = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        employee_name = str(emp_user["full_name"] or emp_user["username"])
+        created_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # noqa: DTZ005  # Preserving naive datetime
 
         with get_db() as conn:
             conn.execute(
@@ -4766,9 +5029,14 @@ def add_performance_review(user_id):
             )
             conn.commit()
 
-        create_notification(user_id, "New Performance Review Published", f"You received a review for {review_period} with score {overall_rating:.1f} ★.", url_for('employee_performance_profile', user_id=user_id))
-        flash('Performance review submitted successfully.', 'success')
-        return redirect(url_for('employee_performance_profile', user_id=user_id))
+        create_notification(
+            user_id,
+            "New Performance Review Published",
+            f"You received a review for {review_period} with score {overall_rating:.1f} ★.",
+            url_for("employee_performance_profile", user_id=user_id),
+        )
+        flash("Performance review submitted successfully.", "success")
+        return redirect(url_for("employee_performance_profile", user_id=user_id))
 
     return render_template_string(
         """
@@ -4857,14 +5125,17 @@ def add_performance_review(user_id):
 
 # Reports Module Routes
 
-@app.route('/reports')
+
+@app.route("/reports")
 @login_required
 def reports_dashboard():
     with get_db() as conn:
         total_employees = conn.execute("SELECT COUNT(*) FROM employees").fetchone()[0]
         total_attendance = conn.execute("SELECT COUNT(*) FROM attendance").fetchone()[0]
         total_leaves = conn.execute("SELECT COUNT(*) FROM leave_requests").fetchone()[0]
-        avg_rating = conn.execute("SELECT COALESCE(AVG(overall_rating), 0) FROM performance_reviews").fetchone()[0]
+        avg_rating = conn.execute(
+            "SELECT COALESCE(AVG(overall_rating), 0) FROM performance_reviews"
+        ).fetchone()[0]
         total_projects = conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
         total_tasks = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
 
@@ -4998,35 +5269,39 @@ def reports_dashboard():
     )
 
 
-@app.route('/reports/employees')
+@app.route("/reports/employees")
 @login_required
 def reports_employees():
-    selected_dept = request.args.get('dept', '').strip()
+    selected_dept = request.args.get("dept", "").strip()
 
     with get_db() as conn:
-        emp_rows = conn.execute("SELECT id, user_id, name, department, salary FROM employees").fetchall()
+        emp_rows = conn.execute(
+            "SELECT id, user_id, name, department, salary FROM employees"
+        ).fetchall()
         user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
 
     total_emp = len(emp_rows)
-    linked_user_count = sum(1 for e in emp_rows if e['user_id'] is not None)
+    linked_user_count = sum(1 for e in emp_rows if e["user_id"] is not None)
     unlinked_count = total_emp - linked_user_count
-    salaries = [e['salary'] for e in emp_rows if e['salary'] is not None]
+    salaries = [e["salary"] for e in emp_rows if e["salary"] is not None]
     avg_salary = sum(salaries) / len(salaries) if salaries else 0.0
 
     dept_counts = {}
     dept_salaries = {}
     for e in emp_rows:
-        depts = [d.strip() for d in (e['department'] or 'Unassigned').split(',') if d.strip()]
+        depts = [
+            d.strip() for d in (e["department"] or "Unassigned").split(",") if d.strip()
+        ]
         if not depts:
-            depts = ['Unassigned']
+            depts = ["Unassigned"]
         for d in depts:
             dept_counts[d] = dept_counts.get(d, 0) + 1
             if d not in dept_salaries:
                 dept_salaries[d] = []
-            if e['salary']:
-                dept_salaries[d].append(e['salary'])
+            if e["salary"]:
+                dept_salaries[d].append(e["salary"])
 
-    all_dept_labels = sorted(list(dept_counts.keys()))
+    all_dept_labels = sorted(dept_counts.keys())
     dept_labels = all_dept_labels
     dept_values = [dept_counts[d] for d in dept_labels]
 
@@ -5036,11 +5311,9 @@ def reports_employees():
             continue
         s_list = dept_salaries.get(d, [])
         d_avg_sal = sum(s_list) / len(s_list) if s_list else 0.0
-        dept_summary.append({
-            'department': d,
-            'count': dept_counts[d],
-            'avg_salary': d_avg_sal
-        })
+        dept_summary.append(
+            {"department": d, "count": dept_counts[d], "avg_salary": d_avg_sal}
+        )
 
     return render_template_string(
         """
@@ -5112,7 +5385,7 @@ def reports_employees():
                 <div class="card shadow-sm border-0 border-start border-warning border-4 h-100">
                     <div class="card-body">
                         <div class="text-muted small fw-semibold">Average Salary</div>
-                        <div class="display-6 fw-bold text-dark my-1">${{ '%.0f'|format(avg_salary) }}</div>
+                        <div class="display-6 fw-bold text-dark my-1">{{ avg_salary|inr }}</div>
                         <span class="text-muted small">Average compensation</span>
                     </div>
                 </div>
@@ -5167,7 +5440,7 @@ def reports_employees():
                                 <tr>
                                     <td class="fw-bold"><i class="bi bi-building me-2 text-primary"></i>{{ d.department }}</td>
                                     <td><span class="badge bg-primary fs-6">{{ d.count }}</span></td>
-                                    <td>${{ '%.2f'|format(d.avg_salary) }}</td>
+                                    <td>{{ d.avg_salary | inr }}</td>
                                 </tr>
                             {% else %}
                                 <tr><td colspan="3" class="text-center py-4 text-muted">No department records matching filter.</td></tr>
@@ -5256,11 +5529,11 @@ def reports_employees():
     )
 
 
-@app.route('/reports/attendance')
+@app.route("/reports/attendance")
 @login_required
 def reports_attendance():
-    start_date = request.args.get('start_date', '').strip()
-    end_date = request.args.get('end_date', '').strip()
+    start_date = request.args.get("start_date", "").strip()
+    end_date = request.args.get("end_date", "").strip()
 
     query_where = []
     params = []
@@ -5274,25 +5547,38 @@ def reports_attendance():
     where_clause = (" WHERE " + " AND ".join(query_where)) if query_where else ""
 
     with get_db() as conn:
-        total_logs = conn.execute("SELECT COUNT(*) FROM attendance" + where_clause, params).fetchone()[0]
-        total_hours = conn.execute("SELECT COALESCE(SUM(total_hours), 0) FROM attendance" + where_clause, params).fetchone()[0]
-        avg_hours = conn.execute("SELECT COALESCE(AVG(total_hours), 0) FROM attendance WHERE total_hours IS NOT NULL" + ((" AND " + " AND ".join(query_where)) if query_where else ""), params).fetchone()[0]
+        total_logs = conn.execute(
+            "SELECT COUNT(*) FROM attendance" + where_clause, params
+        ).fetchone()[0]
+        total_hours = conn.execute(
+            "SELECT COALESCE(SUM(total_hours), 0) FROM attendance" + where_clause,
+            params,
+        ).fetchone()[0]
+        avg_hours = conn.execute(
+            "SELECT COALESCE(AVG(total_hours), 0) FROM attendance WHERE total_hours IS NOT NULL"
+            + ((" AND " + " AND ".join(query_where)) if query_where else ""),
+            params,
+        ).fetchone()[0]
 
         trend_rows = conn.execute(
-            "SELECT date, COUNT(*) AS count, COALESCE(SUM(total_hours), 0) AS total_hrs FROM attendance" + where_clause + " GROUP BY date ORDER BY date ASC LIMIT 15",
-            params
+            "SELECT date, COUNT(*) AS count, COALESCE(SUM(total_hours), 0) AS total_hrs FROM attendance"
+            + where_clause
+            + " GROUP BY date ORDER BY date ASC LIMIT 15",
+            params,
         ).fetchall()
 
         top_employee_rows = conn.execute(
-            "SELECT username, COALESCE(SUM(total_hours), 0) AS total_hrs, COUNT(*) AS log_count FROM attendance" + where_clause + " GROUP BY username ORDER BY total_hrs DESC LIMIT 8",
-            params
+            "SELECT username, COALESCE(SUM(total_hours), 0) AS total_hrs, COUNT(*) AS log_count FROM attendance"
+            + where_clause
+            + " GROUP BY username ORDER BY total_hrs DESC LIMIT 8",
+            params,
         ).fetchall()
 
-    trend_dates = [r['date'] for r in trend_rows]
-    trend_hours = [round(r['total_hrs'], 2) for r in trend_rows]
+    trend_dates = [r["date"] for r in trend_rows]
+    trend_hours = [round(r["total_hrs"], 2) for r in trend_rows]
 
-    emp_names = [r['username'] for r in top_employee_rows]
-    emp_hours = [round(r['total_hrs'], 2) for r in top_employee_rows]
+    emp_names = [r["username"] for r in top_employee_rows]
+    emp_hours = [round(r["total_hrs"], 2) for r in top_employee_rows]
 
     return render_template_string(
         """
@@ -5505,11 +5791,11 @@ def reports_attendance():
     )
 
 
-@app.route('/reports/leave')
+@app.route("/reports/leave")
 @login_required
 def reports_leave():
-    selected_status = request.args.get('status', '').strip()
-    selected_type = request.args.get('leave_type', '').strip()
+    selected_status = request.args.get("status", "").strip()
+    selected_type = request.args.get("leave_type", "").strip()
 
     query_where = []
     params = []
@@ -5524,20 +5810,31 @@ def reports_leave():
 
     with get_db() as conn:
         total_leaves = conn.execute("SELECT COUNT(*) FROM leave_requests").fetchone()[0]
-        approved_count = conn.execute("SELECT COUNT(*) FROM leave_requests WHERE status = 'Approved'").fetchone()[0]
-        pending_count = conn.execute("SELECT COUNT(*) FROM leave_requests WHERE status = 'Pending'").fetchone()[0]
-        rejected_count = conn.execute("SELECT COUNT(*) FROM leave_requests WHERE status = 'Rejected'").fetchone()[0]
+        approved_count = conn.execute(
+            "SELECT COUNT(*) FROM leave_requests WHERE status = 'Approved'"
+        ).fetchone()[0]
+        pending_count = conn.execute(
+            "SELECT COUNT(*) FROM leave_requests WHERE status = 'Pending'"
+        ).fetchone()[0]
+        rejected_count = conn.execute(
+            "SELECT COUNT(*) FROM leave_requests WHERE status = 'Rejected'"
+        ).fetchone()[0]
 
         type_rows = conn.execute(
             "SELECT leave_type, COUNT(*) AS count, COALESCE(SUM(total_days), 0) AS total_days FROM leave_requests GROUP BY leave_type ORDER BY count DESC"
         ).fetchall()
 
-        all_types = [r['leave_type'] for r in type_rows]
+        all_types = [r["leave_type"] for r in type_rows]
 
-        recent_leaves = conn.execute("SELECT * FROM leave_requests" + where_clause + " ORDER BY applied_date DESC LIMIT 15", params).fetchall()
+        recent_leaves = conn.execute(
+            "SELECT * FROM leave_requests"
+            + where_clause
+            + " ORDER BY applied_date DESC LIMIT 15",
+            params,
+        ).fetchall()
 
-    type_labels = [r['leave_type'] for r in type_rows]
-    type_counts = [r['count'] for r in type_rows]
+    type_labels = [r["leave_type"] for r in type_rows]
+    type_counts = [r["count"] for r in type_rows]
 
     return render_template_string(
         """
@@ -5774,21 +6071,35 @@ def reports_leave():
     )
 
 
-@app.route('/reports/performance')
+@app.route("/reports/performance")
 @login_required
 def reports_performance():
-    min_rating = request.args.get('min_rating', '').strip()
+    min_rating = request.args.get("min_rating", "").strip()
     min_val = float(min_rating) if min_rating else 0.0
 
     with get_db() as conn:
-        total_evaluations = conn.execute("SELECT COUNT(*) FROM performance_reviews").fetchone()[0]
-        avg_rating = conn.execute("SELECT COALESCE(AVG(overall_rating), 0) FROM performance_reviews").fetchone()[0]
-        high_performers = conn.execute("SELECT COUNT(DISTINCT employee_user_id) FROM performance_reviews WHERE overall_rating >= 4.5").fetchone()[0]
+        total_evaluations = conn.execute(
+            "SELECT COUNT(*) FROM performance_reviews"
+        ).fetchone()[0]
+        avg_rating = conn.execute(
+            "SELECT COALESCE(AVG(overall_rating), 0) FROM performance_reviews"
+        ).fetchone()[0]
+        high_performers = conn.execute(
+            "SELECT COUNT(DISTINCT employee_user_id) FROM performance_reviews WHERE overall_rating >= 4.5"
+        ).fetchone()[0]
 
-        avg_tech = conn.execute("SELECT COALESCE(AVG(technical_skills_score), 0) FROM performance_reviews").fetchone()[0]
-        avg_comm = conn.execute("SELECT COALESCE(AVG(communication_score), 0) FROM performance_reviews").fetchone()[0]
-        avg_prod = conn.execute("SELECT COALESCE(AVG(productivity_score), 0) FROM performance_reviews").fetchone()[0]
-        avg_team = conn.execute("SELECT COALESCE(AVG(teamwork_score), 0) FROM performance_reviews").fetchone()[0]
+        avg_tech = conn.execute(
+            "SELECT COALESCE(AVG(technical_skills_score), 0) FROM performance_reviews"
+        ).fetchone()[0]
+        avg_comm = conn.execute(
+            "SELECT COALESCE(AVG(communication_score), 0) FROM performance_reviews"
+        ).fetchone()[0]
+        avg_prod = conn.execute(
+            "SELECT COALESCE(AVG(productivity_score), 0) FROM performance_reviews"
+        ).fetchone()[0]
+        avg_team = conn.execute(
+            "SELECT COALESCE(AVG(teamwork_score), 0) FROM performance_reviews"
+        ).fetchone()[0]
 
         top_performers = conn.execute(
             """
@@ -5799,7 +6110,7 @@ def reports_performance():
             ORDER BY avg_score DESC
             LIMIT 10
             """,
-            (min_val,)
+            (min_val,),
         ).fetchall()
 
     return render_template_string(
@@ -6005,10 +6316,10 @@ def reports_performance():
     )
 
 
-@app.route('/reports/projects')
+@app.route("/reports/projects")
 @login_required
 def reports_projects():
-    selected_status = request.args.get('status', '').strip()
+    selected_status = request.args.get("status", "").strip()
 
     task_where = []
     task_params = []
@@ -6021,28 +6332,38 @@ def reports_projects():
     with get_db() as conn:
         total_projects = conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
         total_tasks = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
-        completed_tasks = conn.execute("SELECT COUNT(*) FROM tasks WHERE status = 'Completed'").fetchone()[0]
-        completion_rate = (completed_tasks / total_tasks * 100) if total_tasks > 0 else 0.0
-        total_logged_hours = conn.execute("SELECT COALESCE(SUM(hours_worked), 0) FROM time_logs").fetchone()[0]
+        completed_tasks = conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE status = 'Completed'"
+        ).fetchone()[0]
+        completion_rate = (
+            (completed_tasks / total_tasks * 100) if total_tasks > 0 else 0.0
+        )
+        total_logged_hours = conn.execute(
+            "SELECT COALESCE(SUM(hours_worked), 0) FROM time_logs"
+        ).fetchone()[0]
 
-        status_rows = conn.execute("SELECT status, COUNT(*) AS count FROM tasks GROUP BY status").fetchall()
-        status_dict = {r['status']: r['count'] for r in status_rows}
+        status_rows = conn.execute(
+            "SELECT status, COUNT(*) AS count FROM tasks GROUP BY status"
+        ).fetchall()
+        status_dict = {r["status"]: r["count"] for r in status_rows}
 
         workload_rows = conn.execute(
-            """
+            (
+                """
             SELECT assigned_to, COUNT(*) AS total_tasks,
                    SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) AS completed_tasks,
                    SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) AS pending_tasks
             FROM tasks
             """
-            + where_clause +
-            """
+                + where_clause
+                + """
             AND assigned_to IS NOT NULL AND assigned_to != ''
             GROUP BY assigned_to
             ORDER BY total_tasks DESC
             LIMIT 10
-            """ if where_clause else
             """
+                if where_clause
+                else """
             SELECT assigned_to, COUNT(*) AS total_tasks,
                    SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) AS completed_tasks,
                    SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) AS pending_tasks
@@ -6051,12 +6372,13 @@ def reports_projects():
             GROUP BY assigned_to
             ORDER BY total_tasks DESC
             LIMIT 10
-            """,
-            task_params
+            """
+            ),
+            task_params,
         ).fetchall()
 
-    workload_names = [r['assigned_to'] for r in workload_rows]
-    workload_tasks = [r['total_tasks'] for r in workload_rows]
+    workload_names = [r["assigned_to"] for r in workload_rows]
+    workload_tasks = [r["total_tasks"] for r in workload_rows]
 
     return render_template_string(
         """
@@ -6280,13 +6602,13 @@ def reports_projects():
     )
 
 
-
 # Notification API & View Routes
 
-@app.route('/api/notifications')
+
+@app.route("/api/notifications")
 @login_required
 def api_get_notifications():
-    unread_only = request.args.get('unread_only', '1') == '1'
+    unread_only = request.args.get("unread_only", "1") == "1"
     with get_db() as conn:
         query = """
             SELECT id, title, message, link, is_read, created_at
@@ -6302,38 +6624,37 @@ def api_get_notifications():
 
         unread_count = conn.execute(
             "SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0",
-            (current_user.id,)
+            (current_user.id,),
         ).fetchone()[0]
 
     notifs = [dict(r) for r in rows]
-    return jsonify({'unread_count': unread_count, 'notifications': notifs})
+    return jsonify({"unread_count": unread_count, "notifications": notifs})
 
 
-@app.route('/api/notifications/<int:notif_id>/read', methods=['POST'])
+@app.route("/api/notifications/<int:notif_id>/read", methods=["POST"])
 @login_required
 def api_mark_notification_read(notif_id):
     with get_db() as conn:
         conn.execute(
             "UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?",
-            (notif_id, current_user.id)
+            (notif_id, current_user.id),
         )
         conn.commit()
-    return jsonify({'status': 'success'})
+    return jsonify({"status": "success"})
 
 
-@app.route('/api/notifications/read-all', methods=['POST'])
+@app.route("/api/notifications/read-all", methods=["POST"])
 @login_required
 def api_mark_all_notifications_read():
     with get_db() as conn:
         conn.execute(
-            "UPDATE notifications SET is_read = 1 WHERE user_id = ?",
-            (current_user.id,)
+            "UPDATE notifications SET is_read = 1 WHERE user_id = ?", (current_user.id,)
         )
         conn.commit()
-    return jsonify({'status': 'success'})
+    return jsonify({"status": "success"})
 
 
-@app.route('/notifications')
+@app.route("/notifications")
 @login_required
 def user_notifications():
     with get_db() as conn:
@@ -6344,7 +6665,7 @@ def user_notifications():
             WHERE user_id = ?
             ORDER BY id DESC
             """,
-            (current_user.id,)
+            (current_user.id,),
         ).fetchall()
 
     return render_template_string(
@@ -6410,30 +6731,39 @@ def user_notifications():
 
 # Settings Module Routes
 
-@app.route('/settings')
+
+@app.route("/settings")
 @login_required
 def settings_overview():
-    return redirect(url_for('settings_profile'))
+    return redirect(url_for("settings_profile"))
 
 
-@app.route('/settings/profile', methods=['GET', 'POST'])
+@app.route("/settings/profile", methods=["GET", "POST"])
 @login_required
 def settings_profile():
-    if request.method == 'POST':
-        full_name = request.form.get('full_name', '').strip()
-        email = request.form.get('email', '').strip()
+    if request.method == "POST":
+        full_name = request.form.get("full_name", "").strip()
+        email = request.form.get("email", "").strip()
         with get_db() as conn:
             conn.execute(
                 "UPDATE users SET full_name = ?, email = ? WHERE id = ?",
-                (full_name or None, email or None, current_user.id)
+                (full_name or None, email or None, current_user.id),
             )
             conn.commit()
-        notify_user_by_name_or_username(current_user.username, "Profile Updated", "Your account profile information was updated.", url_for('settings_profile'))
-        flash('Profile settings updated successfully.', 'success')
-        return redirect(url_for('settings_profile'))
+        notify_user_by_name_or_username(
+            current_user.username,
+            "Profile Updated",
+            "Your account profile information was updated.",
+            url_for("settings_profile"),
+        )
+        flash("Profile settings updated successfully.", "success")
+        return redirect(url_for("settings_profile"))
 
     with get_db() as conn:
-        u = conn.execute("SELECT id, username, full_name, email, role FROM users WHERE id = ?", (current_user.id,)).fetchone()
+        u = conn.execute(
+            "SELECT id, username, full_name, email, role FROM users WHERE id = ?",
+            (current_user.id,),
+        ).fetchone()
 
     return render_template_string(
         """
@@ -6500,41 +6830,46 @@ def settings_profile():
         </div>
         {% endblock %}
         """,
-        u=u
+        u=u,
     )
 
 
-@app.route('/settings/security', methods=['GET', 'POST'])
+@app.route("/settings/security", methods=["GET", "POST"])
 @login_required
 def settings_security():
-    if request.method == 'POST':
-        action = request.form.get('action')
-        if action == 'change_password':
-            curr_pw = request.form.get('current_password', '').strip()
-            new_pw = request.form.get('new_password', '').strip()
-            conf_pw = request.form.get('confirm_password', '').strip()
+    if request.method == "POST":
+        action = request.form.get("action")
+        if action == "change_password":
+            curr_pw = request.form.get("current_password", "").strip()
+            new_pw = request.form.get("new_password", "").strip()
+            conf_pw = request.form.get("confirm_password", "").strip()
 
             if not check_password_hash(current_user.password_hash, curr_pw):
-                flash('Current password is incorrect.', 'danger')
-                return redirect(url_for('settings_security'))
+                flash("Current password is incorrect.", "danger")
+                return redirect(url_for("settings_security"))
             if new_pw != conf_pw:
-                flash('New passwords do not match.', 'danger')
-                return redirect(url_for('settings_security'))
+                flash("New passwords do not match.", "danger")
+                return redirect(url_for("settings_security"))
             if len(new_pw) < 6:
-                flash('New password must be at least 6 characters.', 'danger')
-                return redirect(url_for('settings_security'))
+                flash("New password must be at least 6 characters.", "danger")
+                return redirect(url_for("settings_security"))
 
             with get_db() as conn:
                 conn.execute(
                     "UPDATE users SET password_hash = ?, force_password_change = 0 WHERE id = ?",
-                    (generate_password_hash(new_pw), current_user.id)
+                    (generate_password_hash(new_pw), current_user.id),
                 )
                 conn.commit()
             current_user.password_hash = generate_password_hash(new_pw)
             current_user.force_password_change = False
-            create_notification(current_user.id, "Security Alert: Password Changed", "Your account password was changed successfully.", url_for('settings_security'))
-            flash('Password updated successfully.', 'success')
-            return redirect(url_for('settings_security'))
+            create_notification(
+                current_user.id,
+                "Security Alert: Password Changed",
+                "Your account password was changed successfully.",
+                url_for("settings_security"),
+            )
+            flash("Password updated successfully.", "success")
+            return redirect(url_for("settings_security"))
 
     return render_template_string(
         """
@@ -6622,27 +6957,33 @@ def settings_security():
     )
 
 
-@app.route('/settings/appearance', methods=['GET', 'POST'])
+@app.route("/settings/appearance", methods=["GET", "POST"])
 @login_required
 def settings_appearance():
-    if request.method == 'POST':
-        theme = request.form.get('theme', 'light').strip()
-        sidebar_style = request.form.get('sidebar_style', 'default').strip()
+    if request.method == "POST":
+        theme = request.form.get("theme", "light").strip()
+        sidebar_style = request.form.get("sidebar_style", "default").strip()
         with get_db() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO user_preferences (user_id, theme, sidebar_style)
                 VALUES (?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET theme = excluded.theme, sidebar_style = excluded.sidebar_style
-            """, (current_user.id, theme, sidebar_style))
+            """,
+                (current_user.id, theme, sidebar_style),
+            )
             conn.commit()
-        flash('Appearance preferences saved.', 'success')
-        return redirect(url_for('settings_appearance'))
+        flash("Appearance preferences saved.", "success")
+        return redirect(url_for("settings_appearance"))
 
     with get_db() as conn:
-        pref = conn.execute("SELECT theme, sidebar_style FROM user_preferences WHERE user_id = ?", (current_user.id,)).fetchone()
+        pref = conn.execute(
+            "SELECT theme, sidebar_style FROM user_preferences WHERE user_id = ?",
+            (current_user.id,),
+        ).fetchone()
 
-    theme = pref['theme'] if pref else 'light'
-    sidebar_style = pref['sidebar_style'] if pref else 'default'
+    theme = pref["theme"] if pref else "light"
+    sidebar_style = pref["sidebar_style"] if pref else "default"
 
     return render_template_string(
         """
@@ -6721,36 +7062,41 @@ def settings_appearance():
         {% endblock %}
         """,
         theme=theme,
-        sidebar_style=sidebar_style
+        sidebar_style=sidebar_style,
     )
 
 
-@app.route('/settings/company', methods=['GET', 'POST'])
+@app.route("/settings/company", methods=["GET", "POST"])
 @login_required
 def settings_company():
-    if current_user.role != 'admin':
-        flash('Admin access required for Company Settings.', 'danger')
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required for Company Settings.", "danger")
+        return redirect(url_for("dashboard"))
 
-    if request.method == 'POST':
-        c_name = request.form.get('company_name', '').strip()
-        c_email = request.form.get('company_email', '').strip()
-        c_address = request.form.get('company_address', '').strip()
-        w_hours = request.form.get('working_hours', '').strip()
-        gst = request.form.get('gst_number', '').strip()
+    if request.method == "POST":
+        c_name = request.form.get("company_name", "").strip()
+        c_email = request.form.get("company_email", "").strip()
+        c_address = request.form.get("company_address", "").strip()
+        w_hours = request.form.get("working_hours", "").strip()
+        gst = request.form.get("gst_number", "").strip()
 
         with get_db() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE company_settings
                 SET company_name = ?, company_email = ?, company_address = ?, working_hours = ?, gst_number = ?
                 WHERE id = 1
-            """, (c_name, c_email, c_address, w_hours, gst))
+            """,
+                (c_name, c_email, c_address, w_hours, gst),
+            )
             conn.commit()
-        flash('Company settings updated successfully.', 'success')
-        return redirect(url_for('settings_company'))
+        flash("Company settings updated successfully.", "success")
+        return redirect(url_for("settings_company"))
 
     with get_db() as conn:
-        cs = conn.execute("SELECT company_name, company_email, company_address, working_hours, gst_number FROM company_settings WHERE id = 1").fetchone()
+        cs = conn.execute(
+            "SELECT company_name, company_email, company_address, working_hours, gst_number FROM company_settings WHERE id = 1"
+        ).fetchone()
 
     return render_template_string(
         """
@@ -6809,29 +7155,33 @@ def settings_company():
         </div>
         {% endblock %}
         """,
-        cs=cs
+        cs=cs,
     )
 
 
-@app.route('/settings/payroll', methods=['GET', 'POST'])
+@app.route("/settings/payroll", methods=["GET", "POST"])
 @login_required
 def settings_payroll():
-    if current_user.role != 'admin':
-        flash('Admin access required for Payroll Settings.', 'danger')
-        return redirect(url_for('dashboard'))
+    if current_user.role != "admin":
+        flash("Admin access required for Payroll Settings.", "danger")
+        return redirect(url_for("dashboard"))
 
-    if request.method == 'POST':
-        currency = request.form.get('currency', 'INR (₹)').strip()
+    if request.method == "POST":
+        currency = request.form.get("currency", "INR (₹)").strip()
         with get_db() as conn:
-            conn.execute("UPDATE company_settings SET currency = ? WHERE id = 1", (currency,))
+            conn.execute(
+                "UPDATE company_settings SET currency = ? WHERE id = 1", (currency,)
+            )
             conn.commit()
-        flash('Payroll currency and settings updated.', 'success')
-        return redirect(url_for('settings_payroll'))
+        flash("Payroll currency and settings updated.", "success")
+        return redirect(url_for("settings_payroll"))
 
     with get_db() as conn:
-        cs = conn.execute("SELECT currency FROM company_settings WHERE id = 1").fetchone()
+        cs = conn.execute(
+            "SELECT currency FROM company_settings WHERE id = 1"
+        ).fetchone()
 
-    currency = cs['currency'] if cs else 'INR (₹)'
+    currency = cs["currency"] if cs else "INR (₹)"
 
     return render_template_string(
         """
@@ -6892,31 +7242,37 @@ def settings_payroll():
         </div>
         {% endblock %}
         """,
-        currency=currency
+        currency=currency,
     )
 
 
-@app.route('/settings/notifications', methods=['GET', 'POST'])
+@app.route("/settings/notifications", methods=["GET", "POST"])
 @login_required
 def settings_notifications():
-    if request.method == 'POST':
-        email_notif = 1 if request.form.get('email_notifications') == 'on' else 0
-        in_app_notif = 1 if request.form.get('in_app_notifications') == 'on' else 0
+    if request.method == "POST":
+        email_notif = 1 if request.form.get("email_notifications") == "on" else 0
+        in_app_notif = 1 if request.form.get("in_app_notifications") == "on" else 0
         with get_db() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO user_preferences (user_id, email_notifications, in_app_notifications)
                 VALUES (?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET email_notifications = excluded.email_notifications, in_app_notifications = excluded.in_app_notifications
-            """, (current_user.id, email_notif, in_app_notif))
+            """,
+                (current_user.id, email_notif, in_app_notif),
+            )
             conn.commit()
-        flash('Notification preferences updated.', 'success')
-        return redirect(url_for('settings_notifications'))
+        flash("Notification preferences updated.", "success")
+        return redirect(url_for("settings_notifications"))
 
     with get_db() as conn:
-        pref = conn.execute("SELECT email_notifications, in_app_notifications FROM user_preferences WHERE user_id = ?", (current_user.id,)).fetchone()
+        pref = conn.execute(
+            "SELECT email_notifications, in_app_notifications FROM user_preferences WHERE user_id = ?",
+            (current_user.id,),
+        ).fetchone()
 
-    email_notif = pref['email_notifications'] if pref else 1
-    in_app_notif = pref['in_app_notifications'] if pref else 1
+    email_notif = pref["email_notifications"] if pref else 1
+    in_app_notif = pref["in_app_notifications"] if pref else 1
 
     return render_template_string(
         """
@@ -6970,10 +7326,10 @@ def settings_notifications():
         {% endblock %}
         """,
         email_notif=email_notif,
-        in_app_notif=in_app_notif
+        in_app_notif=in_app_notif,
     )
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
     app.run(debug=True)

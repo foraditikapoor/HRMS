@@ -1,0 +1,19 @@
+{
+  "include": [
+    "."
+  ],
+  "exclude": [
+    "**/__pycache__",
+    ".venv",
+    "venv"
+  ],
+  "pythonVersion": "3.14",
+  "pythonPlatform": "Windows",
+  "pythonPath": "D:/LOGIN SOFTWARE/.venv/Scripts/python.exe",
+  "extraPaths": [
+    "D:/LOGIN SOFTWARE/.venv/Lib/site-packages"
+  ],
+  "typeCheckingMode": "off",
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none"
+}

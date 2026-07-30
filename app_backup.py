@@ -108,7 +108,7 @@ def send_welcome_email(recipient_email, full_name, username, temporary_password)
             server.starttls()
             server.login(EMAIL_ADDRESS, EMAIL_APP_PASSWORD)
             server.sendmail(EMAIL_ADDRESS, recipient_email, message.as_string())
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # Email send fallback error handling
         print("Failed to send welcome email:", e)
 
 
@@ -416,7 +416,7 @@ def create_user():
                     conn.commit()
                     try:
                         send_welcome_email(email, full_name, username, temp_password)
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001  # Email send fallback error handling
                         print("Failed to send welcome email:", e)
                     message = (
                         f"User created successfully. Temporary password: {temp_password}"

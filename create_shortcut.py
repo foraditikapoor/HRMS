@@ -24,8 +24,8 @@ icon_path = os.path.abspath('app.ico') if os.path.exists('app.ico') else None
 # Try using win32com if available
 try:
     import pythoncom
-    from win32com.shell import shell, shellcon
     from win32com.client import Dispatch
+    from win32com.shell import shell, shellcon
 
     shell_link = Dispatch('WScript.Shell').CreateShortCut(shortcut_path)
     shell_link.Targetpath = exe_path
@@ -34,7 +34,7 @@ try:
         shell_link.IconLocation = icon_path
     shell_link.save()
     print('Shortcut created at', shortcut_path)
-except Exception as e:
+except Exception:  # noqa: BLE001  # Fallback to .url shortcut on any win32com error
     # Fallback: create an Internet Shortcut (.url) which opens the exe
     url_shortcut = os.path.join(desktop, 'HRMS.url')
     with open(url_shortcut, 'w') as f:
