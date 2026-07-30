@@ -3544,7 +3544,7 @@ def download_attendance():
         ).fetchall()
     # Generate Excel file using openpyxl
     try:
-        from openpyxl import Workbook
+        from openpyxl import Workbook  # type: ignore[import-untyped]
     except Exception:  # noqa: BLE001  # Catch import error or missing openpyxl dependency
         flash("openpyxl is not installed on the server.", "danger")
         return redirect(url_for("admin_attendance"))
@@ -4426,47 +4426,50 @@ def reject_leave(leave_id):
 @app.route("/performance")
 @login_required
 def performance_dashboard():
+    if current_user.role != "admin":
+        flash("Access denied. Admin privileges required.", "danger")
+        return redirect(url_for("dashboard"))
+
     with get_db() as conn:
-        if current_user.role == "admin":
-            total_reviews = conn.execute(
-                "SELECT COUNT(*) FROM performance_reviews"
+        total_reviews = conn.execute(
+            "SELECT COUNT(*) FROM performance_reviews"
+        ).fetchone()[0]
+        avg_company_rating = (
+            conn.execute(
+                "SELECT AVG(overall_rating) FROM performance_reviews"
             ).fetchone()[0]
-            avg_company_rating = (
-                conn.execute(
-                    "SELECT AVG(overall_rating) FROM performance_reviews"
-                ).fetchone()[0]
-                or 0.0
-            )
+            or 0.0
+        )
 
-            users_rows = conn.execute(
-                """
-                SELECT u.id, u.username, u.role, u.full_name, u.email,
-                       COUNT(r.id) AS review_count,
-                       AVG(r.overall_rating) AS avg_rating,
-                       MAX(r.created_at) AS latest_review_date
-                FROM users u
-                LEFT JOIN performance_reviews r ON r.employee_user_id = u.id
-                GROUP BY u.id
-                ORDER BY CASE WHEN AVG(r.overall_rating) IS NULL THEN 1 ELSE 0 END, AVG(r.overall_rating) DESC, u.username ASC
-                """
-            ).fetchall()
-            employees_perf = [dict(row) for row in users_rows]
+        users_rows = conn.execute(
+            """
+            SELECT u.id, u.username, u.role, u.full_name, u.email,
+                   COUNT(r.id) AS review_count,
+                   AVG(r.overall_rating) AS avg_rating,
+                   MAX(r.created_at) AS latest_review_date
+            FROM users u
+            LEFT JOIN performance_reviews r ON r.employee_user_id = u.id
+            GROUP BY u.id
+            ORDER BY CASE WHEN AVG(r.overall_rating) IS NULL THEN 1 ELSE 0 END, AVG(r.overall_rating) DESC, u.username ASC
+            """
+        ).fetchall()
+        employees_perf = [dict(row) for row in users_rows]
 
-            # Rating distribution metrics for visual chart
-            dist_high = sum(
-                1 for e in employees_perf if e["avg_rating"] and e["avg_rating"] >= 4.5
-            )
-            dist_good = sum(
-                1
-                for e in employees_perf
-                if e["avg_rating"] and 3.5 <= e["avg_rating"] < 4.5
-            )
-            dist_needs_work = sum(
-                1 for e in employees_perf if e["avg_rating"] and e["avg_rating"] < 3.5
-            )
-            dist_unrated = sum(1 for e in employees_perf if not e["avg_rating"])
+        # Rating distribution metrics for visual chart
+        dist_high = sum(
+            1 for e in employees_perf if e["avg_rating"] and e["avg_rating"] >= 4.5
+        )
+        dist_good = sum(
+            1
+            for e in employees_perf
+            if e["avg_rating"] and 3.5 <= e["avg_rating"] < 4.5
+        )
+        dist_needs_work = sum(
+            1 for e in employees_perf if e["avg_rating"] and e["avg_rating"] < 3.5
+        )
+        dist_unrated = sum(1 for e in employees_perf if not e["avg_rating"])
 
-            return render_template_string(
+    return render_template_string(
                 """
                 {% extends "base.html" %}
                 {% block title %}Performance Dashboard{% endblock %}
@@ -4700,10 +4703,6 @@ def performance_dashboard():
                 dist_needs_work=dist_needs_work,
                 dist_unrated=dist_unrated,
             )
-        else:
-            return redirect(
-                url_for("employee_performance_profile", user_id=current_user.id)
-            )
 
 
 @app.route("/performance/profile/<int:user_id>")
@@ -4711,7 +4710,7 @@ def performance_dashboard():
 def employee_performance_profile(user_id):
     if current_user.role != "admin" and current_user.id != user_id:
         flash("Access denied.", "danger")
-        return redirect(url_for("performance_dashboard"))
+        return redirect(url_for("dashboard"))
 
     with get_db() as conn:
         emp_user = conn.execute(
@@ -4958,7 +4957,7 @@ def employee_performance_profile(user_id):
 def add_performance_review(user_id):
     if current_user.role != "admin":
         flash("Admin access required to add performance reviews.", "danger")
-        return redirect(url_for("performance_dashboard"))
+        return redirect(url_for("dashboard"))
 
     with get_db() as conn:
         emp_user = conn.execute(
@@ -5129,6 +5128,10 @@ def add_performance_review(user_id):
 @app.route("/reports")
 @login_required
 def reports_dashboard():
+    if current_user.role != "admin":
+        flash("Access denied. Admin privileges required.", "danger")
+        return redirect(url_for("dashboard"))
+
     with get_db() as conn:
         total_employees = conn.execute("SELECT COUNT(*) FROM employees").fetchone()[0]
         total_attendance = conn.execute("SELECT COUNT(*) FROM attendance").fetchone()[0]
@@ -5272,6 +5275,10 @@ def reports_dashboard():
 @app.route("/reports/employees")
 @login_required
 def reports_employees():
+    if current_user.role != "admin":
+        flash("Access denied. Admin privileges required.", "danger")
+        return redirect(url_for("dashboard"))
+
     selected_dept = request.args.get("dept", "").strip()
 
     with get_db() as conn:
@@ -5532,6 +5539,10 @@ def reports_employees():
 @app.route("/reports/attendance")
 @login_required
 def reports_attendance():
+    if current_user.role != "admin":
+        flash("Access denied. Admin privileges required.", "danger")
+        return redirect(url_for("dashboard"))
+
     start_date = request.args.get("start_date", "").strip()
     end_date = request.args.get("end_date", "").strip()
 
@@ -5794,6 +5805,10 @@ def reports_attendance():
 @app.route("/reports/leave")
 @login_required
 def reports_leave():
+    if current_user.role != "admin":
+        flash("Access denied. Admin privileges required.", "danger")
+        return redirect(url_for("dashboard"))
+
     selected_status = request.args.get("status", "").strip()
     selected_type = request.args.get("leave_type", "").strip()
 
@@ -6074,6 +6089,10 @@ def reports_leave():
 @app.route("/reports/performance")
 @login_required
 def reports_performance():
+    if current_user.role != "admin":
+        flash("Access denied. Admin privileges required.", "danger")
+        return redirect(url_for("dashboard"))
+
     min_rating = request.args.get("min_rating", "").strip()
     min_val = float(min_rating) if min_rating else 0.0
 
@@ -6319,6 +6338,10 @@ def reports_performance():
 @app.route("/reports/projects")
 @login_required
 def reports_projects():
+    if current_user.role != "admin":
+        flash("Access denied. Admin privileges required.", "danger")
+        return redirect(url_for("dashboard"))
+
     selected_status = request.args.get("status", "").strip()
 
     task_where = []

@@ -15,5 +15,6 @@
   ],
   "typeCheckingMode": "off",
   "reportMissingImports": "none",
-  "reportMissingModuleSource": "none"
+  "reportMissingModuleSource": "none",
+  "reportMissingTypeStubs": "none"
 }
