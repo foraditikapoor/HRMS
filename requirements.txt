@@ -19,3 +19,5 @@ python-dotenv==1.2.2
 pywin32-ctypes==0.2.3
 setuptools==83.0.0
 Werkzeug==3.1.8
+reportlab
+types-reportlab

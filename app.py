@@ -440,7 +440,8 @@ def ensure_tasks_table():
                     estimated_hours REAL,
                     recurring_type TEXT,
                     status TEXT NOT NULL DEFAULT 'Pending',
-                    completed_by TEXT
+                    completed_by TEXT,
+                    completion_date TEXT
                 )
                 """
             )
@@ -459,6 +460,7 @@ def ensure_tasks_table():
             "recurring_type",
             "status",
             "completed_by",
+            "completion_date",
         ]
         for column_name in required_columns:
             if column_name not in existing_columns:
@@ -1077,7 +1079,7 @@ def my_tasks():
                        COALESCE(SUM(l.hours_worked), 0) AS total_logged_hours
                 FROM tasks t
                 LEFT JOIN time_logs l ON l.task_id = t.id
-                WHERE t.assigned_to IN ({placeholders})
+                WHERE t.assigned_to IN ({placeholders}) AND (t.status IS NULL OR t.status != 'Completed')
                 GROUP BY t.id
                 ORDER BY t.assigned_date, t.deadline, t.title
                 """,
@@ -1331,9 +1333,10 @@ def update_task(task_id):
             )
         if status != task["status"]:
             completed_by = current_user.username if status == "Completed" else None
+            completion_date = datetime.date.today().isoformat() if status == "Completed" else None  # noqa: DTZ011
             conn.execute(
-                "UPDATE tasks SET status = ?, completed_by = ? WHERE id = ?",
-                (status, completed_by, task_id),
+                "UPDATE tasks SET status = ?, completed_by = ?, completion_date = ? WHERE id = ?",
+                (status, completed_by, completion_date, task_id),
             )
             conn.commit()
             notify_admins(
@@ -1453,9 +1456,12 @@ def task_management():
 
         if action == "edit" and task_id:
             with get_db() as conn:
+                completion_date = (
+                    datetime.date.today().isoformat() if status == "Completed" else None  # noqa: DTZ011
+                )
                 conn.execute(
                     """
-                    UPDATE tasks SET title=?, task_category=?, description=?, project=?, assigned_to=?, assigned_by=?, assigned_date=?, deadline=?, priority=?, estimated_hours=?, recurring_type=?, status=?, completed_by=? WHERE id=?
+                    UPDATE tasks SET title=?, task_category=?, description=?, project=?, assigned_to=?, assigned_by=?, assigned_date=?, deadline=?, priority=?, estimated_hours=?, recurring_type=?, status=?, completed_by=?, completion_date=? WHERE id=?
                     """,
                     (
                         title,
@@ -1471,6 +1477,7 @@ def task_management():
                         recurring_type,
                         status,
                         current_user.username if status == "Completed" else None,
+                        completion_date,
                         task_id,
                     ),
                 )
@@ -1485,10 +1492,13 @@ def task_management():
             return redirect(url_for("task_management"))
 
         with get_db() as conn:
+            completion_date = (
+                datetime.date.today().isoformat() if status == "Completed" else None  # noqa: DTZ011
+            )
             conn.execute(
                 """
-                INSERT INTO tasks (title, task_category, description, project, assigned_to, assigned_by, assigned_date, deadline, priority, estimated_hours, recurring_type, status, completed_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO tasks (title, task_category, description, project, assigned_to, assigned_by, assigned_date, deadline, priority, estimated_hours, recurring_type, status, completed_by, completion_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     title,
@@ -1504,6 +1514,7 @@ def task_management():
                     recurring_type,
                     status,
                     current_user.username if status == "Completed" else None,
+                    completion_date,
                 ),
             )
             conn.commit()
@@ -1555,6 +1566,7 @@ def task_management():
             <div class="container py-5">
                 <div class="d-flex align-items-center mb-4">
                     <h1 class="h3 me-auto mb-0">Task Management</h1>
+                    <a class="btn btn-outline-primary me-2" href="{{ url_for('completed_tasks_archive') }}"><i class="bi bi-archive me-1"></i>Completed Tasks Archive</a>
                     <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}">Back</a>
                 </div>
                 {% with messages = get_flashed_messages(with_categories=true) %}
@@ -1816,6 +1828,594 @@ def task_management():
         project_filter=project_filter,
         status_filter=status_filter,
     )
+
+
+def fetch_completed_tasks_records(conn, args):
+    q = (args.get("q") or "").strip()
+    employee_filter = (args.get("employee_filter") or "").strip()
+    project_filter = (args.get("project_filter") or "").strip()
+    status_filter = (args.get("status_filter") or "Completed").strip()
+    start_date = (args.get("start_date") or "").strip()
+    end_date = (args.get("end_date") or "").strip()
+
+    sql = """
+        SELECT t.id, t.title, t.task_category, t.description, t.project, t.assigned_to, t.assigned_by,
+               t.assigned_date, t.deadline, t.priority, COALESCE(t.estimated_hours, 0) AS estimated_hours,
+               t.recurring_type, t.status, t.completed_by, t.completion_date,
+               COALESCE(SUM(l.hours_worked), 0) AS total_logged_hours
+        FROM tasks t
+        LEFT JOIN time_logs l ON l.task_id = t.id
+        WHERE 1=1
+    """
+    params = []
+    if status_filter and status_filter.lower() != "all":
+        sql += " AND t.status = ?"
+        params.append(status_filter)
+
+    if employee_filter:
+        sql += " AND t.assigned_to = ?"
+        params.append(employee_filter)
+
+    if project_filter:
+        sql += " AND t.project = ?"
+        params.append(project_filter)
+
+    if start_date:
+        sql += " AND (COALESCE(t.completion_date, t.assigned_date) >= ?)"
+        params.append(start_date)
+
+    if end_date:
+        sql += " AND (COALESCE(t.completion_date, t.assigned_date) <= ?)"
+        params.append(end_date)
+
+    if q:
+        sql += " AND (t.title LIKE ? OR t.project LIKE ? OR t.assigned_to LIKE ? OR t.assigned_by LIKE ? OR t.description LIKE ?)"
+        term = f"%{q}%"
+        params.extend([term, term, term, term, term])
+
+    sql += " GROUP BY t.id ORDER BY COALESCE(t.completion_date, t.assigned_date) DESC, t.id DESC"
+
+    tasks = conn.execute(sql, params).fetchall()
+
+    task_notes = {}
+    if tasks:
+        task_ids = [t["id"] for t in tasks]
+        placeholders = ",".join("?" for _ in task_ids)
+        logs = conn.execute(
+            f"SELECT task_id, logged_date, hours_worked, notes FROM time_logs WHERE task_id IN ({placeholders}) AND notes IS NOT NULL AND notes != '' ORDER BY id ASC",
+            task_ids,
+        ).fetchall()
+        for log in logs:
+            tid = log["task_id"]
+            if tid not in task_notes:
+                task_notes[tid] = []
+            task_notes[tid].append({
+                "date": log["logged_date"],
+                "hours": log["hours_worked"],
+                "notes": log["notes"]
+            })
+
+    results = []
+    for t in tasks:
+        item = dict(t)
+        tid = t["id"]
+        logs_list = task_notes.get(tid, [])
+        item["logs"] = logs_list
+        item["notes_summary"] = " | ".join(f"{l['date']}: {l['notes']}" for l in logs_list) if logs_list else (t["description"] or "N/A")
+        results.append(item)
+
+    return results
+
+
+@app.route("/admin/tasks/completed")
+@login_required
+def completed_tasks_archive():
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
+
+    with get_db() as conn:
+        employees = conn.execute("SELECT name FROM employees ORDER BY name").fetchall()
+        task_projects = conn.execute("SELECT DISTINCT project FROM tasks WHERE project IS NOT NULL AND project != '' ORDER BY project").fetchall()
+        tasks = fetch_completed_tasks_records(conn, request.args)
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Completed Tasks Archive{% endblock %}
+        {% block page_content %}
+        <div class="container-fluid py-4">
+            <div class="d-flex align-items-center justify-content-between mb-4">
+                <div>
+                    <h1 class="h3 mb-1"><i class="bi bi-archive-fill text-primary me-2"></i>Completed Tasks Archive</h1>
+                    <p class="text-muted mb-0">View, search, filter, and export records of completed employee tasks.</p>
+                </div>
+                <div class="d-flex gap-2">
+                    <a href="{{ url_for('task_management') }}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left me-1"></i>Active Tasks</a>
+                    <a href="{{ url_for('export_completed_tasks_csv', **request.args) }}" class="btn btn-outline-success"><i class="bi bi-file-earmark-spreadsheet me-1"></i>Export CSV</a>
+                    <a href="{{ url_for('export_completed_tasks_excel', **request.args) }}" class="btn btn-outline-primary"><i class="bi bi-file-earmark-excel me-1"></i>Export Excel</a>
+                    <a href="{{ url_for('export_completed_tasks_pdf', **request.args) }}" class="btn btn-outline-danger"><i class="bi bi-file-earmark-pdf me-1"></i>Export PDF</a>
+                </div>
+            </div>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            <div class="card shadow-sm mb-4">
+                <div class="card-body">
+                    <form method="get" class="row g-3">
+                        <div class="col-md-3">
+                            <label class="form-label small fw-semibold">Search</label>
+                            <input type="text" name="q" class="form-control form-control-sm" placeholder="Title, employee, project..." value="{{ request.args.get('q', '') }}">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small fw-semibold">Employee</label>
+                            <select name="employee_filter" class="form-select form-select-sm">
+                                <option value="">All Employees</option>
+                                {% for emp in employees %}
+                                    <option value="{{ emp.name }}" {% if request.args.get('employee_filter') == emp.name %}selected{% endif %}>{{ emp.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small fw-semibold">Project</label>
+                            <select name="project_filter" class="form-select form-select-sm">
+                                <option value="">All Projects</option>
+                                {% for proj in task_projects %}
+                                    <option value="{{ proj.project }}" {% if request.args.get('project_filter') == proj.project %}selected{% endif %}>{{ proj.project }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small fw-semibold">Status</label>
+                            <select name="status_filter" class="form-select form-select-sm">
+                                <option value="Completed" {% if request.args.get('status_filter', 'Completed') == 'Completed' %}selected{% endif %}>Completed</option>
+                                <option value="All" {% if request.args.get('status_filter') == 'All' %}selected{% endif %}>All Statuses</option>
+                                <option value="Pending" {% if request.args.get('status_filter') == 'Pending' %}selected{% endif %}>Pending</option>
+                                <option value="In Progress" {% if request.args.get('status_filter') == 'In Progress' %}selected{% endif %}>In Progress</option>
+                                <option value="Blocked" {% if request.args.get('status_filter') == 'Blocked' %}selected{% endif %}>Blocked</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label small fw-semibold">Date Range</label>
+                            <div class="input-group input-group-sm">
+                                <input type="date" name="start_date" class="form-control" value="{{ request.args.get('start_date', '') }}">
+                                <span class="input-group-text">to</span>
+                                <input type="date" name="end_date" class="form-control" value="{{ request.args.get('end_date', '') }}">
+                            </div>
+                        </div>
+                        <div class="col-12 d-flex justify-content-end gap-2">
+                            <a href="{{ url_for('completed_tasks_archive') }}" class="btn btn-sm btn-light border">Reset Filters</a>
+                            <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-funnel me-1"></i>Apply Filters</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card shadow-sm">
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover table-striped mb-0 align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>#</th>
+                                    <th>Employee</th>
+                                    <th>Task Title</th>
+                                    <th>Project</th>
+                                    <th>Assigned By</th>
+                                    <th>Assigned Date</th>
+                                    <th>Completion Date</th>
+                                    <th>Time Taken</th>
+                                    <th>Status</th>
+                                    <th>Notes / Comments</th>
+                                    <th class="text-end">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% if tasks %}
+                                    {% for task in tasks %}
+                                        <tr>
+                                            <td><small class="text-muted">#{{ task.id }}</small></td>
+                                            <td><strong>{{ task.assigned_to }}</strong></td>
+                                            <td>{{ task.title }}</td>
+                                            <td><span class="badge bg-secondary-subtle text-secondary border">{{ task.project }}</span></td>
+                                            <td>{{ task.assigned_by }}</td>
+                                            <td>{{ task.assigned_date or 'N/A' }}</td>
+                                            <td>{{ task.completion_date or 'N/A' }}</td>
+                                            <td><span class="badge bg-info-subtle text-info-emphasis">{{ '%.2f'|format(task.total_logged_hours or 0) }} hrs</span></td>
+                                            <td>
+                                                {% if task.status == 'Completed' %}
+                                                    <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Completed</span>
+                                                {% elif task.status == 'In Progress' %}
+                                                    <span class="badge bg-primary">In Progress</span>
+                                                {% elif task.status == 'Blocked' %}
+                                                    <span class="badge bg-danger">Blocked</span>
+                                                {% else %}
+                                                    <span class="badge bg-warning text-dark">Pending</span>
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                <small class="text-truncate d-inline-block" style="max-width: 200px;" title="{{ task.notes_summary }}">
+                                                    {{ task.notes_summary }}
+                                                </small>
+                                            </td>
+                                            <td class="text-end">
+                                                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#taskModal{{ task.id }}">
+                                                    <i class="bi bi-eye me-1"></i>View Details
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                {% else %}
+                                    <tr>
+                                        <td colspan="11" class="text-center text-muted py-4">No task records found matching the filter criteria.</td>
+                                    </tr>
+                                {% endif %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {% for task in tasks %}
+        <div class="modal fade" id="taskModal{{ task.id }}" tabindex="-1" aria-labelledby="taskModalLabel{{ task.id }}" aria-hidden="true">
+            <div class="modal-dialog modal-lg modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header bg-light">
+                        <h5 class="modal-title" id="taskModalLabel{{ task.id }}"><i class="bi bi-info-circle text-primary me-2"></i>Task Details #{{ task.id }}</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-8">
+                                <h4 class="h5 text-primary mb-1">{{ task.title }}</h4>
+                                <p class="text-muted small mb-2">Category: {{ task.task_category or 'General' }} | Project: <strong>{{ task.project }}</strong></p>
+                            </div>
+                            <div class="col-md-4 text-md-end">
+                                <span class="badge bg-success fs-6 p-2"><i class="bi bi-check-circle me-1"></i>{{ task.status }}</span>
+                            </div>
+                        </div>
+
+                        <div class="row g-3 mb-4">
+                            <div class="col-md-4">
+                                <div class="p-2 border rounded bg-light">
+                                    <small class="text-muted d-block">Assigned To</small>
+                                    <strong>{{ task.assigned_to }}</strong>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="p-2 border rounded bg-light">
+                                    <small class="text-muted d-block">Assigned By</small>
+                                    <strong>{{ task.assigned_by }}</strong>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="p-2 border rounded bg-light">
+                                    <small class="text-muted d-block">Completed By</small>
+                                    <strong>{{ task.completed_by or task.assigned_to }}</strong>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="p-2 border rounded bg-light">
+                                    <small class="text-muted d-block">Assigned Date</small>
+                                    <strong>{{ task.assigned_date or 'N/A' }}</strong>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="p-2 border rounded bg-light">
+                                    <small class="text-muted d-block">Deadline</small>
+                                    <strong>{{ task.deadline or 'N/A' }}</strong>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="p-2 border rounded bg-light">
+                                    <small class="text-muted d-block">Completion Date</small>
+                                    <strong>{{ task.completion_date or 'N/A' }}</strong>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="p-2 border rounded bg-light">
+                                    <small class="text-muted d-block">Estimated Hours</small>
+                                    <strong>{{ '%.2f'|format(task.estimated_hours or 0) }} hrs</strong>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="p-2 border rounded bg-light">
+                                    <small class="text-muted d-block">Total Time Logged</small>
+                                    <strong class="text-success">{{ '%.2f'|format(task.total_logged_hours or 0) }} hrs</strong>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="p-2 border rounded bg-light">
+                                    <small class="text-muted d-block">Priority / Recurring</small>
+                                    <strong>{{ task.priority }} {% if task.recurring_type %}({{ task.recurring_type }}){% endif %}</strong>
+                                </div>
+                            </div>
+                        </div>
+
+                        {% if task.description %}
+                        <div class="mb-4">
+                            <h6>Description / Instructions</h6>
+                            <div class="p-3 bg-light border rounded small">{{ task.description }}</div>
+                        </div>
+                        {% endif %}
+
+                        <div>
+                            <h6>Work Notes & Time Logs</h6>
+                            {% if task.logs %}
+                                <ul class="list-group list-group-flush border rounded">
+                                    {% for log in task.logs %}
+                                        <li class="list-group-item d-flex justify-content-between align-items-start">
+                                            <div>
+                                                <small class="fw-semibold text-primary">{{ log.date }}</small>
+                                                <p class="mb-0 small">{{ log.notes }}</p>
+                                            </div>
+                                            <span class="badge bg-secondary rounded-pill">{{ log.hours }} hrs</span>
+                                        </li>
+                                    {% endfor %}
+                                </ul>
+                            {% else %}
+                                <div class="text-muted small">No detailed work notes logged for this task.</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+        {% endblock %}
+        """,
+        employees=employees,
+        task_projects=task_projects,
+        tasks=tasks,
+    )
+
+
+@app.route("/admin/tasks/completed/export/csv")
+@login_required
+def export_completed_tasks_csv():
+    import csv
+
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
+
+    with get_db() as conn:
+        tasks = fetch_completed_tasks_records(conn, request.args)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Task ID",
+        "Employee Name",
+        "Task Title",
+        "Category",
+        "Project",
+        "Assigned By",
+        "Assigned Date",
+        "Completion Date",
+        "Deadline",
+        "Status",
+        "Estimated Hours",
+        "Time Taken (Hours)",
+        "Notes / Comments"
+    ])
+
+    for t in tasks:
+        writer.writerow([
+            t["id"],
+            t["assigned_to"],
+            t["title"],
+            t["task_category"] or "",
+            t["project"],
+            t["assigned_by"],
+            t["assigned_date"] or "",
+            t["completion_date"] or "",
+            t["deadline"] or "",
+            t["status"],
+            f"{t['estimated_hours']:.2f}",
+            f"{t['total_logged_hours']:.2f}",
+            t["notes_summary"]
+        ])
+
+    response = Response(output.getvalue(), mimetype="text/csv")
+    response.headers["Content-Disposition"] = 'attachment; filename="completed_tasks_archive.csv"'
+    return response
+
+
+@app.route("/admin/tasks/completed/export/excel")
+@login_required
+def export_completed_tasks_excel():
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
+
+    with get_db() as conn:
+        tasks = fetch_completed_tasks_records(conn, request.args)
+
+    try:
+        from openpyxl import Workbook  # type: ignore[import-untyped]
+    except Exception:  # noqa: BLE001
+        flash("openpyxl dependency is missing.", "danger")
+        return redirect(url_for("completed_tasks_archive"))
+
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "Completed Tasks Archive"
+
+    headers = [
+        "Task ID",
+        "Employee Name",
+        "Task Title",
+        "Category",
+        "Project",
+        "Assigned By",
+        "Assigned Date",
+        "Completion Date",
+        "Deadline",
+        "Status",
+        "Estimated Hours",
+        "Time Taken (Hours)",
+        "Notes / Comments"
+    ]
+    ws.append(headers)
+
+    for t in tasks:
+        ws.append([
+            t["id"],
+            t["assigned_to"],
+            t["title"],
+            t["task_category"] or "",
+            t["project"],
+            t["assigned_by"],
+            t["assigned_date"] or "",
+            t["completion_date"] or "",
+            t["deadline"] or "",
+            t["status"],
+            t["estimated_hours"],
+            t["total_logged_hours"],
+            t["notes_summary"]
+        ])
+
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    payload = bio.getvalue()
+
+    headers = {
+        "Content-Disposition": 'attachment; filename="completed_tasks_archive.xlsx"',
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Length": str(len(payload)),
+    }
+    return Response(payload, headers=headers)
+
+
+@app.route("/admin/tasks/completed/export/pdf")
+@login_required
+def export_completed_tasks_pdf():
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
+
+    with get_db() as conn:
+        tasks = fetch_completed_tasks_records(conn, request.args)
+
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import landscape, letter
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.platypus import Paragraph, SimpleDocTemplate, Table, TableStyle
+    except Exception as e:  # noqa: BLE001
+        flash(f"PDF generation failed: {e}", "danger")
+        return redirect(url_for("completed_tasks_archive"))
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(letter),
+        rightMargin=30,
+        leftMargin=30,
+        topMargin=30,
+        bottomMargin=30,
+    )
+    elements = []
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        "TitleStyle",
+        parent=styles["Heading1"],
+        fontSize=18,
+        leading=22,
+        textColor=colors.HexColor("#1e293b"),
+        spaceAfter=6,
+    )
+    subtitle_style = ParagraphStyle(
+        "SubtitleStyle",
+        parent=styles["Normal"],
+        fontSize=10,
+        textColor=colors.HexColor("#64748b"),
+        spaceAfter=15,
+    )
+    cell_style = ParagraphStyle(
+        "CellStyle",
+        parent=styles["Normal"],
+        fontSize=8,
+        leading=10,
+        textColor=colors.HexColor("#334155"),
+    )
+    header_style = ParagraphStyle(
+        "HeaderStyle",
+        parent=styles["Normal"],
+        fontSize=9,
+        leading=11,
+        fontName="Helvetica-Bold",
+        textColor=colors.white,
+    )
+
+    elements.append(Paragraph("Completed Tasks Archive Report", title_style))
+    today_str = datetime.date.today().isoformat()  # noqa: DTZ011
+    elements.append(Paragraph(f"Generated on {today_str} | Total Records: {len(tasks)}", subtitle_style))
+
+    table_data = [[
+        Paragraph("Employee", header_style),
+        Paragraph("Task Title", header_style),
+        Paragraph("Project", header_style),
+        Paragraph("Assigned By", header_style),
+        Paragraph("Assigned Date", header_style),
+        Paragraph("Completion Date", header_style),
+        Paragraph("Time Taken", header_style),
+        Paragraph("Status", header_style),
+        Paragraph("Notes/Comments", header_style),
+    ]]
+
+    for t in tasks:
+        table_data.append([
+            Paragraph(t["assigned_to"], cell_style),
+            Paragraph(t["title"], cell_style),
+            Paragraph(t["project"], cell_style),
+            Paragraph(t["assigned_by"], cell_style),
+            Paragraph(t["assigned_date"] or "N/A", cell_style),
+            Paragraph(t["completion_date"] or "N/A", cell_style),
+            Paragraph(f"{t['total_logged_hours']:.2f} hrs", cell_style),
+            Paragraph(t["status"], cell_style),
+            Paragraph(t["notes_summary"][:120], cell_style),
+        ])
+
+    col_widths = [80, 110, 80, 75, 65, 65, 55, 55, 145]
+    table = Table(table_data, colWidths=col_widths, repeatRows=1)
+    table.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e40af")),
+            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ])
+    )
+    elements.append(table)
+    doc.build(elements)
+
+    buffer.seek(0)
+    pdf_data = buffer.getvalue()
+    headers = {
+        "Content-Disposition": 'attachment; filename="completed_tasks_archive.pdf"',
+        "Content-Type": "application/pdf",
+        "Content-Length": str(len(pdf_data)),
+    }
+    return Response(pdf_data, headers=headers)
 
 
 @app.route("/admin")
@@ -2629,7 +3229,7 @@ def delete_employee(emp_id):
             flash("Employee not found.", "warning")
             return redirect(url_for("admin_employees"))
 
-        linked_user_id = r["user_id"] if "user_id" in r else None
+        linked_user_id = r.get("user_id", None)
         employee_name = r["name"]
 
         # Prevent active admin self-deletion
