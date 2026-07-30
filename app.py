@@ -181,6 +181,12 @@ def get_user_task_names(conn, user):
     ).fetchone()
     if user_row and user_row["full_name"]:
         names.add(user_row["full_name"])
+    emp_row = conn.execute(
+        "SELECT name FROM employees WHERE user_id = ?",
+        (user.id,),
+    ).fetchone()
+    if emp_row and emp_row["name"]:
+        names.add(emp_row["name"])
     return list(names)
 
 
@@ -598,11 +604,11 @@ def create_notification(user_id, title, message, link=None):
 
 
 def notify_admins(title, message, link=None):
-    """Helper to push an in-app notification to all admin users."""
+    """Helper to push an in-app notification to all admin and manager users."""
     try:
         with get_db() as conn:
             admin_rows = conn.execute(
-                "SELECT id FROM users WHERE role = 'admin'"
+                "SELECT id FROM users WHERE role IN ('admin', 'manager')"
             ).fetchall()
             admin_ids = [r["id"] for r in admin_rows]
         for aid in admin_ids:
@@ -2631,6 +2637,8 @@ def punch_in():
 def punch_out():
     today = datetime.date.today().isoformat()  # noqa: DTZ011  # Naive date check
     user_id = current_user.id
+    now_dt = datetime.datetime.now()  # noqa: DTZ005  # Naive datetime for punch out
+    now = now_dt.isoformat()
     with get_db() as conn:
         rec = conn.execute(
             "SELECT id, punch_in_time, punch_out_time FROM attendance WHERE user_id = ? AND date = ?",
@@ -2642,7 +2650,6 @@ def punch_out():
         if rec["punch_out_time"]:
             flash("You have already punched out today.", "warning")
             return redirect(url_for("dashboard"))
-        now = datetime.datetime.now().isoformat()  # noqa: DTZ005  # Naive datetime for punch out
         # calculate total hours
         try:
             t_in = datetime.datetime.fromisoformat(rec["punch_in_time"])
@@ -2656,6 +2663,42 @@ def punch_out():
             (now, total_hours, rec["id"]),
         )
         conn.commit()
+
+        # Check for active unfinished tasks assigned to this employee
+        user_names = get_user_task_names(conn, current_user)
+        emp_name = None
+        emp_row = conn.execute("SELECT name FROM employees WHERE user_id = ?", (user_id,)).fetchone()
+        if emp_row and emp_row["name"]:
+            emp_name = emp_row["name"]
+        if not emp_name:
+            user_row = conn.execute("SELECT full_name FROM users WHERE id = ?", (user_id,)).fetchone()
+            if user_row and user_row["full_name"]:
+                emp_name = user_row["full_name"]
+        if not emp_name:
+            emp_name = current_user.username
+
+        placeholders = ", ".join("?" for _ in user_names)
+        active_tasks = conn.execute(
+            f"SELECT id, title, project, status FROM tasks WHERE assigned_to IN ({placeholders}) AND (status IS NULL OR status != 'Completed')",
+            user_names,
+        ).fetchall()
+
+        if active_tasks:
+            count = len(active_tasks)
+            titles = [f"'{t['title']}'" for t in active_tasks if t["title"]]
+            if len(titles) <= 3:
+                titles_summary = ", ".join(titles)
+            else:
+                titles_summary = ", ".join(titles[:3]) + f", and {len(titles) - 3} more"
+
+            punch_out_display = now_dt.strftime("%I:%M %p")
+            notif_title = "Unfinished Tasks at Punch-Out"
+            notif_msg = (
+                f"Employee {emp_name} punched out at {punch_out_display} with {count} active "
+                f"task(s) remaining: {titles_summary}."
+            )
+            notify_admins(notif_title, notif_msg, url_for("task_management"))
+
     hrs_str = f" ({total_hours:.1f} hrs logged)" if total_hours is not None else ""
     create_notification(
         current_user.id,
