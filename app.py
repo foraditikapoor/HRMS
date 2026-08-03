@@ -3183,9 +3183,9 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
 
         notes_txt = ""
         if leave_entry:
-            notes_txt = f"Leave Reason: {leave_entry.get('reason') or leave_entry['leave_type']}"
+            notes_txt = f"Leave Reason: {leave_entry['reason'] or leave_entry['leave_type']}"
         elif holiday_entry:
-            notes_txt = f"Holiday Details: {holiday_entry.get('description') or holiday_entry['title']}"
+            notes_txt = f"Holiday Details: {holiday_entry['description'] or holiday_entry['title']}"
 
         days_list.append(
             {
