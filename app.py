@@ -28,6 +28,7 @@ except Exception:  # noqa: BLE001  # Fallback manual env loader on import error
             print("DEBUG: failed to load .env manually:", e)
     else:
         print(f"DEBUG: no .env found at {dotenv_path}")
+import calendar
 import secrets  # noqa: I001
 import smtplib
 import sqlite3
@@ -301,6 +302,41 @@ def ensure_attendance_table():
             """
         )
         conn.commit()
+
+
+def ensure_holidays_table():
+    """Create holidays table if it does not exist and populate default company holidays."""
+    with get_db() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS holidays (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                date TEXT UNIQUE NOT NULL,
+                description TEXT
+            )
+            """
+        )
+        conn.commit()
+
+        # Seed default Indian company holidays if empty
+        row_count = conn.execute("SELECT COUNT(*) FROM holidays").fetchone()[0]
+        if row_count == 0:
+            current_yr = datetime.date.today().year
+            default_holidays = [
+                ("New Year's Day", f"{current_yr}-01-01", "Official Holiday"),
+                ("Republic Day", f"{current_yr}-01-26", "National Holiday"),
+                ("Labor Day", f"{current_yr}-05-01", "Official Holiday"),
+                ("Independence Day", f"{current_yr}-08-15", "National Holiday"),
+                ("Gandhi Jayanti", f"{current_yr}-10-02", "National Holiday"),
+                ("Diwali", f"{current_yr}-11-01", "Festival Holiday"),
+                ("Christmas Day", f"{current_yr}-12-25", "Official Holiday"),
+            ]
+            conn.executemany(
+                "INSERT OR IGNORE INTO holidays (title, date, description) VALUES (?, ?, ?)",
+                default_holidays,
+            )
+            conn.commit()
 
 
 def ensure_employee_table():
@@ -771,6 +807,16 @@ def format_attendance_timestamp(val):
         return "-"
 
 
+@app.template_filter("month_name_filter")
+def month_name_filter(month_num):
+    """Format month integer (1-12) to month name string."""
+    try:
+        m = int(month_num)
+        return datetime.date(2000, m, 1).strftime("%B")
+    except Exception:
+        return str(month_num)
+
+
 def init_db():
     with get_db() as conn:
         conn.execute(
@@ -787,6 +833,7 @@ def init_db():
 
         ensure_user_columns()
         ensure_attendance_table()
+        ensure_holidays_table()
         ensure_employee_table()
         ensure_projects_table()
         ensure_clients_table()
@@ -2999,67 +3046,763 @@ def logout():
     return redirect(url_for("index"))
 
 
+def get_monthly_attendance_calendar_data(year, month, target_user_id):
+    """Calculate and return monthly attendance calendar days and statistics for a given user."""
+    num_days = calendar.monthrange(year, month)[1]
+    first_weekday = calendar.monthrange(year, month)[0]  # 0 = Monday ... 6 = Sunday
+    start_date_str = f"{year:04d}-{month:02d}-01"
+    end_date_str = f"{year:04d}-{month:02d}-{num_days:02d}"
+    today_str = datetime.date.today().isoformat()
+
+    with get_db() as conn:
+        user_info = conn.execute(
+            "SELECT id, username, full_name FROM users WHERE id = ?", (target_user_id,)
+        ).fetchone()
+
+        emp_info = conn.execute(
+            "SELECT name, department FROM employees WHERE user_id = ?", (target_user_id,)
+        ).fetchone()
+
+        att_rows = conn.execute(
+            "SELECT date, punch_in_time, punch_out_time, total_hours FROM attendance WHERE user_id = ? AND date >= ? AND date <= ?",
+            (target_user_id, start_date_str, end_date_str),
+        ).fetchall()
+        att_dict = {r["date"]: r for r in att_rows}
+
+        leave_rows = conn.execute(
+            "SELECT leave_type, start_date, end_date, status FROM leave_requests WHERE user_id = ? AND status IN ('Approved', 'Pending') AND start_date <= ? AND end_date >= ?",
+            (target_user_id, end_date_str, start_date_str),
+        ).fetchall()
+
+        holiday_rows = conn.execute(
+            "SELECT date, title FROM holidays WHERE date >= ? AND date <= ?",
+            (start_date_str, end_date_str),
+        ).fetchall()
+        holiday_dict = {r["date"]: r["title"] for r in holiday_rows}
+
+    def get_leave_for_date(d_str):
+        for l in leave_rows:
+            if l["start_date"] <= d_str <= l["end_date"]:
+                return l
+        return None
+
+    days_list = []
+    present_count = 0
+    absent_count = 0
+    leave_count = 0
+    holiday_count = 0
+    total_hours_sum = 0.0
+
+    for day in range(1, num_days + 1):
+        d_obj = datetime.date(year, month, day)
+        d_str = d_obj.isoformat()
+        weekday = d_obj.weekday()  # 0=Mon, 5=Sat, 6=Sun
+        is_weekend = weekday in (5, 6)
+
+        att_entry = att_dict.get(d_str)
+        leave_entry = get_leave_for_date(d_str)
+        holiday_name = holiday_dict.get(d_str)
+
+        status = "Future"
+        status_code = "F"
+        status_label = "Upcoming"
+        badge_class = "bg-light text-muted border"
+
+        if att_entry and att_entry["punch_in_time"]:
+            status = "Present"
+            status_code = "P"
+            status_label = "Present"
+            badge_class = "bg-success text-white"
+            present_count += 1
+            if att_entry["total_hours"]:
+                try:
+                    total_hours_sum += float(att_entry["total_hours"])
+                except Exception:
+                    pass
+        elif leave_entry and leave_entry["status"] == "Approved":
+            status = "Leave"
+            status_code = "L"
+            status_label = f"Leave ({leave_entry['leave_type']})"
+            badge_class = "bg-warning text-dark"
+            leave_count += 1
+        elif leave_entry and leave_entry["status"] == "Pending":
+            status = "Pending Leave"
+            status_code = "PL"
+            status_label = f"Pending Leave ({leave_entry['leave_type']})"
+            badge_class = "bg-warning bg-opacity-50 text-dark"
+            leave_count += 1
+        elif holiday_name:
+            status = "Holiday"
+            status_code = "H"
+            status_label = f"Holiday ({holiday_name})"
+            badge_class = "bg-info text-dark"
+            holiday_count += 1
+        elif is_weekend:
+            status = "Weekend"
+            status_code = "W"
+            status_label = "Weekend"
+            badge_class = "bg-secondary text-white opacity-75"
+            holiday_count += 1
+        elif d_str <= today_str:
+            status = "Absent"
+            status_code = "A"
+            status_label = "Absent"
+            badge_class = "bg-danger text-white"
+            absent_count += 1
+
+        days_list.append(
+            {
+                "day": day,
+                "date": d_str,
+                "weekday_name": d_obj.strftime("%a"),
+                "is_weekend": is_weekend,
+                "is_today": (d_str == today_str),
+                "status": status,
+                "status_code": status_code,
+                "status_label": status_label,
+                "badge_class": badge_class,
+                "punch_in": att_entry["punch_in_time"] if att_entry else None,
+                "punch_out": att_entry["punch_out_time"] if att_entry else None,
+                "total_hours": att_entry["total_hours"] if att_entry else None,
+                "leave_type": leave_entry["leave_type"] if leave_entry else None,
+                "holiday_name": holiday_name,
+            }
+        )
+
+    month_date = datetime.date(year, month, 1)
+    month_name = month_date.strftime("%B")
+    prev_month_date = (month_date - datetime.timedelta(days=1)).replace(day=1)
+    next_month_date = (month_date + datetime.timedelta(days=32)).replace(day=1)
+
+    display_name = (
+        (emp_info["name"] if emp_info and emp_info["name"] else None)
+        or (user_info["full_name"] if user_info and user_info["full_name"] else None)
+        or (user_info["username"] if user_info else "Employee")
+    )
+
+    tot_workdays = present_count + absent_count
+    attendance_rate = (
+        round((present_count / tot_workdays * 100), 1) if tot_workdays > 0 else 0.0
+    )
+
+    return {
+        "user_id": target_user_id,
+        "display_name": display_name,
+        "department": (emp_info["department"] if emp_info else "General") or "General",
+        "year": year,
+        "month": month,
+        "month_name": month_name,
+        "prev_year": prev_month_date.year,
+        "prev_month": prev_month_date.month,
+        "next_year": next_month_date.year,
+        "next_month": next_month_date.month,
+        "num_days": num_days,
+        "first_weekday": first_weekday,
+        "days": days_list,
+        "stats": {
+            "present_count": present_count,
+            "absent_count": absent_count,
+            "leave_count": leave_count,
+            "holiday_count": holiday_count,
+            "total_hours": round(total_hours_sum, 2),
+            "attendance_rate": attendance_rate,
+        },
+    }
+
+
+def get_admin_monthly_matrix_data(year, month):
+    """Returns company-wide monthly attendance summary matrix for all active employees."""
+    num_days = calendar.monthrange(year, month)[1]
+    with get_db() as conn:
+        user_rows = conn.execute(
+            """
+            SELECT u.id as user_id, u.username, u.full_name, e.name as emp_name, e.department
+            FROM users u
+            LEFT JOIN employees e ON u.id = e.user_id
+            WHERE u.role != 'disabled'
+            ORDER BY COALESCE(e.name, u.full_name, u.username) ASC
+            """
+        ).fetchall()
+
+    matrix_employees = []
+    tot_pres = 0
+    tot_abs = 0
+    tot_leaves = 0
+
+    for u in user_rows:
+        cal = get_monthly_attendance_calendar_data(year, month, u["user_id"])
+        matrix_employees.append(
+            {
+                "user_id": u["user_id"],
+                "name": u["emp_name"] or u["full_name"] or u["username"],
+                "username": u["username"],
+                "department": u["department"] or "General",
+                "days": cal["days"],
+                "stats": cal["stats"],
+            }
+        )
+        tot_pres += cal["stats"]["present_count"]
+        tot_abs += cal["stats"]["absent_count"]
+        tot_leaves += cal["stats"]["leave_count"]
+
+    tot_workdays = tot_pres + tot_abs
+    avg_rate = (
+        round((tot_pres / tot_workdays * 100), 1) if tot_workdays > 0 else 0.0
+    )
+
+    month_date = datetime.date(year, month, 1)
+    month_name = month_date.strftime("%B")
+    prev_m = (month_date - datetime.timedelta(days=1)).replace(day=1)
+    next_m = (month_date + datetime.timedelta(days=32)).replace(day=1)
+
+    return {
+        "year": year,
+        "month": month,
+        "month_name": month_name,
+        "prev_year": prev_m.year,
+        "prev_month": prev_m.month,
+        "next_year": next_m.year,
+        "next_month": next_m.month,
+        "num_days": num_days,
+        "day_numbers": list(range(1, num_days + 1)),
+        "employees": matrix_employees,
+        "summary": {
+            "total_employees": len(matrix_employees),
+            "total_present": tot_pres,
+            "total_absent": tot_abs,
+            "total_leaves": tot_leaves,
+            "avg_attendance_rate": avg_rate,
+        },
+    }
+
+
+@app.route("/attendance/calendar")
+@login_required
+def employee_attendance_calendar():
+    """Employee Attendance Calendar View"""
+    today = datetime.date.today()
+    year = request.args.get("year", type=int, default=today.year)
+    month = request.args.get("month", type=int, default=today.month)
+
+    # Sanitize month and year
+    if month < 1 or month > 12:
+        month = today.month
+    if year < 2000 or year > 2100:
+        year = today.year
+
+    cal_data = get_monthly_attendance_calendar_data(year, month, current_user.id)
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}My Attendance Calendar{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1 class="h3 mb-1"><i class="bi bi-calendar3 me-2 text-primary"></i>My Attendance Calendar</h1>
+                <p class="text-muted mb-0">Track your daily punch logs, leaves, holidays, and monthly work statistics.</p>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <a href="{{ url_for('employee_attendance_calendar', year=cal_data.prev_year, month=cal_data.prev_month) }}" class="btn btn-outline-secondary btn-sm" title="Previous Month">
+                    <i class="bi bi-chevron-left"></i> Prev
+                </a>
+                <span class="fw-bold px-3 py-1 bg-white border rounded shadow-sm text-dark">{{ cal_data.month_name }} {{ cal_data.year }}</span>
+                <a href="{{ url_for('employee_attendance_calendar', year=cal_data.next_year, month=cal_data.next_month) }}" class="btn btn-outline-secondary btn-sm" title="Next Month">
+                    Next <i class="bi bi-chevron-right"></i>
+                </a>
+                <a href="{{ url_for('employee_attendance_calendar', year=today_year, month=today_month) }}" class="btn btn-primary btn-sm ms-2">
+                    <i class="bi bi-clock-history me-1"></i>Today
+                </a>
+            </div>
+        </div>
+
+        <!-- Metric Stat Cards -->
+        <div class="row g-3 mb-4">
+            <div class="col-6 col-md-4 col-lg-2">
+                <div class="card shadow-sm border-0 border-start border-4 border-success h-100">
+                    <div class="card-body p-3 text-center">
+                        <div class="text-muted small fw-bold mb-1">PRESENT</div>
+                        <div class="display-6 fw-bold text-success">{{ cal_data.stats.present_count }}</div>
+                        <div class="small text-muted">Days</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-4 col-lg-2">
+                <div class="card shadow-sm border-0 border-start border-4 border-danger h-100">
+                    <div class="card-body p-3 text-center">
+                        <div class="text-muted small fw-bold mb-1">ABSENT</div>
+                        <div class="display-6 fw-bold text-danger">{{ cal_data.stats.absent_count }}</div>
+                        <div class="small text-muted">Days</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-4 col-lg-2">
+                <div class="card shadow-sm border-0 border-start border-4 border-warning h-100">
+                    <div class="card-body p-3 text-center">
+                        <div class="text-muted small fw-bold mb-1">LEAVES</div>
+                        <div class="display-6 fw-bold text-warning">{{ cal_data.stats.leave_count }}</div>
+                        <div class="small text-muted">Approved</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-4 col-lg-2">
+                <div class="card shadow-sm border-0 border-start border-4 border-info h-100">
+                    <div class="card-body p-3 text-center">
+                        <div class="text-muted small fw-bold mb-1">HOLIDAYS</div>
+                        <div class="display-6 fw-bold text-info">{{ cal_data.stats.holiday_count }}</div>
+                        <div class="small text-muted">Off Days</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-4 col-lg-2">
+                <div class="card shadow-sm border-0 border-start border-4 border-primary h-100">
+                    <div class="card-body p-3 text-center">
+                        <div class="text-muted small fw-bold mb-1">TOTAL HOURS</div>
+                        <div class="display-6 fw-bold text-primary">{{ cal_data.stats.total_hours }}</div>
+                        <div class="small text-muted">Logged</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-4 col-lg-2">
+                <div class="card shadow-sm border-0 border-start border-4 border-secondary h-100">
+                    <div class="card-body p-3 text-center">
+                        <div class="text-muted small fw-bold mb-1">ATTENDANCE %</div>
+                        <div class="display-6 fw-bold text-dark">{{ cal_data.stats.attendance_rate }}%</div>
+                        <div class="small text-muted">Rate</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Attendance Calendar Container -->
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-grid-3x3-gap me-2 text-primary"></i>Month Grid View</h5>
+                <div class="d-flex gap-2 flex-wrap text-muted small">
+                    <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Present</span>
+                    <span class="badge bg-danger"><i class="bi bi-x-circle me-1"></i>Absent</span>
+                    <span class="badge bg-warning text-dark"><i class="bi bi-calendar-minus me-1"></i>Leave</span>
+                    <span class="badge bg-info text-dark"><i class="bi bi-star me-1"></i>Holiday</span>
+                    <span class="badge bg-secondary opacity-75"><i class="bi bi-cup-hot me-1"></i>Weekend</span>
+                </div>
+            </div>
+            <div class="card-body p-3">
+                <div class="attendance-calendar-grid">
+                    <!-- Weekday Headers -->
+                    <div class="calendar-weekday-header">Mon</div>
+                    <div class="calendar-weekday-header">Tue</div>
+                    <div class="calendar-weekday-header">Wed</div>
+                    <div class="calendar-weekday-header">Thu</div>
+                    <div class="calendar-weekday-header">Fri</div>
+                    <div class="calendar-weekday-header text-danger">Sat</div>
+                    <div class="calendar-weekday-header text-danger">Sun</div>
+
+                    <!-- Offset Empty Cells -->
+                    {% for _ in range(cal_data.first_weekday) %}
+                        <div class="calendar-day-cell empty"></div>
+                    {% endfor %}
+
+                    <!-- Days of Month -->
+                    {% for d in cal_data.days %}
+                        <div class="calendar-day-cell {% if d.is_today %}today-cell{% endif %} {% if d.is_weekend %}weekend-cell{% endif %}">
+                            <div class="day-header d-flex justify-content-between align-items-center mb-2">
+                                <span class="day-number {% if d.is_today %}badge bg-primary rounded-pill{% else %}fw-bold{% endif %}">{{ d.day }}</span>
+                                <span class="badge {{ d.badge_class }} small-badge">{{ d.status }}</span>
+                            </div>
+                            <div class="day-body small">
+                                {% if d.status == 'Present' %}
+                                    <div class="text-success fw-semibold"><i class="bi bi-clock me-1"></i>In: {{ d.punch_in | format_timestamp }}</div>
+                                    {% if d.punch_out %}
+                                        <div class="text-muted"><i class="bi bi-clock-history me-1"></i>Out: {{ d.punch_out | format_timestamp }}</div>
+                                    {% else %}
+                                        <div class="text-warning small"><i class="bi bi-dash-circle me-1"></i>Active</div>
+                                    {% endif %}
+                                    {% if d.total_hours %}
+                                        <div class="badge bg-light text-dark border mt-1"><i class="bi bi-hourglass-split me-1"></i>{{ d.total_hours }} hrs</div>
+                                    {% endif %}
+                                {% elif d.status == 'Leave' or d.status == 'Pending Leave' %}
+                                    <div class="text-warning fw-semibold"><i class="bi bi-calendar-range me-1"></i>{{ d.leave_type or 'Leave' }}</div>
+                                {% elif d.status == 'Holiday' %}
+                                    <div class="text-info fw-semibold"><i class="bi bi-gift me-1"></i>{{ d.holiday_name }}</div>
+                                {% elif d.status == 'Weekend' %}
+                                    <div class="text-muted italic"><i class="bi bi-cup-hot me-1"></i>Weekend</div>
+                                {% elif d.status == 'Absent' %}
+                                    <div class="text-danger"><i class="bi bi-exclamation-octagon me-1"></i>No Log</div>
+                                {% else %}
+                                    <div class="text-muted opacity-50">-</div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endblock %}
+        """,
+        cal_data=cal_data,
+        today_year=today.year,
+        today_month=today.month,
+    )
+
+
 @app.route("/admin/attendance")
+@app.route("/admin/attendance/calendar")
 @login_required
 def admin_attendance():
+    """Admin Attendance Calendar & Monthly Report Dashboard"""
     if current_user.role != "admin":
         flash("Admin access required.", "danger")
         return redirect(url_for("dashboard"))
+
+    today = datetime.date.today()
+    year = request.args.get("year", type=int, default=today.year)
+    month = request.args.get("month", type=int, default=today.month)
+    selected_user_id = request.args.get("user_id", type=str, default="all").strip()
+
+    if month < 1 or month > 12:
+        month = today.month
+    if year < 2000 or year > 2100:
+        year = today.year
+
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT user_id, username, date, punch_in_time, punch_out_time, total_hours FROM attendance ORDER BY date DESC, username"
+        employees_list = conn.execute(
+            """
+            SELECT u.id as user_id, u.username, u.full_name, e.name as emp_name, e.department
+            FROM users u
+            LEFT JOIN employees e ON u.id = e.user_id
+            WHERE u.role != 'disabled'
+            ORDER BY COALESCE(e.name, u.full_name, u.username) ASC
+            """
         ).fetchall()
+
+    # Determine if single employee or company matrix
+    single_cal_data = None
+    matrix_data = None
+
+    if selected_user_id != "all" and selected_user_id.isdigit():
+        target_uid = int(selected_user_id)
+        single_cal_data = get_monthly_attendance_calendar_data(year, month, target_uid)
+    else:
+        matrix_data = get_admin_monthly_matrix_data(year, month)
+
     return render_template_string(
         """
-        <!doctype html>
-        <html lang="en">
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Attendance Management</title>
-            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-        </head>
-        <body class="bg-light">
-            <div class="container py-5">
-                <div class="d-flex align-items-center mb-3">
-                    <a class="btn btn-outline-secondary me-3" href="{{ url_for('dashboard') }}">Back</a>
-                    <h1 class="h3 me-auto mb-0">Attendance Management</h1>
-                    <a class="btn btn-success" href="{{ url_for('download_attendance') }}">Download Attendance Report</a>
+        {% extends "base.html" %}
+        {% block title %}Admin Attendance Calendar & Reports{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1 class="h3 mb-1"><i class="bi bi-calendar-check me-2 text-primary"></i>Attendance Calendar & Monthly Report</h1>
+                <p class="text-muted mb-0">Overview employee attendance calendars, status matrix, and export monthly records.</p>
+            </div>
+            <div class="d-flex gap-2 flex-wrap">
+                <a class="btn btn-success" href="{{ url_for('download_attendance') }}">
+                    <i class="bi bi-file-earmark-spreadsheet me-1"></i>Download Excel Report
+                </a>
+                <a class="btn btn-outline-secondary" href="{{ url_for('reports_attendance') }}">
+                    <i class="bi bi-bar-chart-line me-1"></i>Attendance Analytics
+                </a>
+            </div>
+        </div>
+
+        <!-- Filter Toolbar -->
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-body py-3">
+                <form method="GET" action="{{ url_for('admin_attendance') }}" class="row g-3 align-items-end">
+                    <div class="col-md-4 col-lg-4">
+                        <label class="form-label small fw-bold text-muted mb-1"><i class="bi bi-person me-1"></i>Select Employee</label>
+                        <select name="user_id" class="form-select form-select-sm" onchange="this.form.submit()">
+                            <option value="all" {% if selected_user_id == 'all' %}selected{% endif %}>-- All Employees (Monthly Summary Matrix) --</option>
+                            {% for emp in employees_list %}
+                                {% set label_name = emp.emp_name or emp.full_name or emp.username %}
+                                <option value="{{ emp.user_id }}" {% if selected_user_id == emp.user_id|string %}selected{% endif %}>{{ label_name }} ({{ emp.department or 'General' }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-6 col-md-3 col-lg-2">
+                        <label class="form-label small fw-bold text-muted mb-1"><i class="bi bi-calendar-month me-1"></i>Month</label>
+                        <select name="month" class="form-select form-select-sm" onchange="this.form.submit()">
+                            {% for m in range(1, 13) %}
+                                <option value="{{ m }}" {% if month == m %}selected{% endif %}>{{ m | month_name_filter }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-6 col-md-3 col-lg-2">
+                        <label class="form-label small fw-bold text-muted mb-1"><i class="bi bi-calendar-event me-1"></i>Year</label>
+                        <select name="year" class="form-select form-select-sm" onchange="this.form.submit()">
+                            {% for y in range(today_year - 2, today_year + 2) %}
+                                <option value="{{ y }}" {% if year == y %}selected{% endif %}>{{ y }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2 col-lg-2 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm w-100"><i class="bi bi-filter me-1"></i>Apply</button>
+                        {% if selected_user_id != 'all' or month != today_month or year != today_year %}
+                            <a href="{{ url_for('admin_attendance') }}" class="btn btn-outline-secondary btn-sm" title="Reset Filters"><i class="bi bi-arrow-counterclockwise"></i></a>
+                        {% endif %}
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        {% if single_cal_data %}
+            <!-- Single Employee Detailed Calendar View -->
+            <div class="alert alert-info d-flex justify-content-between align-items-center py-2 px-3 mb-4 shadow-sm">
+                <div>
+                    <i class="bi bi-person-bounding-box me-2 fs-5"></i>
+                    Viewing Attendance Calendar for <strong>{{ single_cal_data.display_name }}</strong> ({{ single_cal_data.department }}) - <strong>{{ single_cal_data.month_name }} {{ single_cal_data.year }}</strong>
                 </div>
-                <div class="card shadow-sm">
-                    <div class="card-body">
-                        <div class="table-responsive">
-                            <table class="table table-striped">
-                                <thead>
-                                    <tr>
-                                        <th>Username</th>
-                                        <th>Date</th>
-                                        <th>Punch In</th>
-                                        <th>Punch Out</th>
-                                        <th>Total Hours</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                {% for r in rows %}
-                                    <tr>
-                                        <td>{{ r.username }}</td>
-                                        <td>{{ r.date }}</td>
-                                        <td>{{ r.punch_in_time | format_timestamp }}</td>
-                                        <td>{{ r.punch_out_time | format_timestamp }}</td>
-                                        <td>{{ r.total_hours or '' }}</td>
-                                    </tr>
-                                {% endfor %}
-                                </tbody>
-                            </table>
+                <a href="{{ url_for('admin_attendance', year=year, month=month, user_id='all') }}" class="btn btn-outline-info btn-sm bg-white text-dark">
+                    <i class="bi bi-grid-3x3 me-1"></i>View All Employees Matrix
+                </a>
+            </div>
+
+            <!-- Single Employee Metric Stat Cards -->
+            <div class="row g-3 mb-4">
+                <div class="col-6 col-md-4 col-lg-2">
+                    <div class="card shadow-sm border-0 border-start border-4 border-success h-100">
+                        <div class="card-body p-3 text-center">
+                            <div class="text-muted small fw-bold mb-1">PRESENT</div>
+                            <div class="display-6 fw-bold text-success">{{ single_cal_data.stats.present_count }}</div>
+                            <div class="small text-muted">Days</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-4 col-lg-2">
+                    <div class="card shadow-sm border-0 border-start border-4 border-danger h-100">
+                        <div class="card-body p-3 text-center">
+                            <div class="text-muted small fw-bold mb-1">ABSENT</div>
+                            <div class="display-6 fw-bold text-danger">{{ single_cal_data.stats.absent_count }}</div>
+                            <div class="small text-muted">Days</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-4 col-lg-2">
+                    <div class="card shadow-sm border-0 border-start border-4 border-warning h-100">
+                        <div class="card-body p-3 text-center">
+                            <div class="text-muted small fw-bold mb-1">LEAVES</div>
+                            <div class="display-6 fw-bold text-warning">{{ single_cal_data.stats.leave_count }}</div>
+                            <div class="small text-muted">Approved</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-4 col-lg-2">
+                    <div class="card shadow-sm border-0 border-start border-4 border-info h-100">
+                        <div class="card-body p-3 text-center">
+                            <div class="text-muted small fw-bold mb-1">HOLIDAYS</div>
+                            <div class="display-6 fw-bold text-info">{{ single_cal_data.stats.holiday_count }}</div>
+                            <div class="small text-muted">Off Days</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-4 col-lg-2">
+                    <div class="card shadow-sm border-0 border-start border-4 border-primary h-100">
+                        <div class="card-body p-3 text-center">
+                            <div class="text-muted small fw-bold mb-1">TOTAL HOURS</div>
+                            <div class="display-6 fw-bold text-primary">{{ single_cal_data.stats.total_hours }}</div>
+                            <div class="small text-muted">Logged</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-4 col-lg-2">
+                    <div class="card shadow-sm border-0 border-start border-4 border-secondary h-100">
+                        <div class="card-body p-3 text-center">
+                            <div class="text-muted small fw-bold mb-1">ATTENDANCE %</div>
+                            <div class="display-6 fw-bold text-dark">{{ single_cal_data.stats.attendance_rate }}%</div>
+                            <div class="small text-muted">Rate</div>
                         </div>
                     </div>
                 </div>
             </div>
-        </body>
-        </html>
+
+            <!-- Calendar Grid -->
+            <div class="card shadow-sm border-0 mb-4">
+                <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                    <h5 class="card-title mb-0 fw-bold"><i class="bi bi-grid-3x3-gap me-2 text-primary"></i>Month Grid View</h5>
+                </div>
+                <div class="card-body p-3">
+                    <div class="attendance-calendar-grid">
+                        <div class="calendar-weekday-header">Mon</div>
+                        <div class="calendar-weekday-header">Tue</div>
+                        <div class="calendar-weekday-header">Wed</div>
+                        <div class="calendar-weekday-header">Thu</div>
+                        <div class="calendar-weekday-header">Fri</div>
+                        <div class="calendar-weekday-header text-danger">Sat</div>
+                        <div class="calendar-weekday-header text-danger">Sun</div>
+
+                        {% for _ in range(single_cal_data.first_weekday) %}
+                            <div class="calendar-day-cell empty"></div>
+                        {% endfor %}
+
+                        {% for d in single_cal_data.days %}
+                            <div class="calendar-day-cell {% if d.is_today %}today-cell{% endif %} {% if d.is_weekend %}weekend-cell{% endif %}">
+                                <div class="day-header d-flex justify-content-between align-items-center mb-2">
+                                    <span class="day-number {% if d.is_today %}badge bg-primary rounded-pill{% else %}fw-bold{% endif %}">{{ d.day }}</span>
+                                    <span class="badge {{ d.badge_class }} small-badge">{{ d.status }}</span>
+                                </div>
+                                <div class="day-body small">
+                                    {% if d.status == 'Present' %}
+                                        <div class="text-success fw-semibold"><i class="bi bi-clock me-1"></i>In: {{ d.punch_in | format_timestamp }}</div>
+                                        {% if d.punch_out %}
+                                            <div class="text-muted"><i class="bi bi-clock-history me-1"></i>Out: {{ d.punch_out | format_timestamp }}</div>
+                                        {% else %}
+                                            <div class="text-warning small"><i class="bi bi-dash-circle me-1"></i>Active</div>
+                                        {% endif %}
+                                        {% if d.total_hours %}
+                                            <div class="badge bg-light text-dark border mt-1"><i class="bi bi-hourglass-split me-1"></i>{{ d.total_hours }} hrs</div>
+                                        {% endif %}
+                                    {% elif d.status == 'Leave' or d.status == 'Pending Leave' %}
+                                        <div class="text-warning fw-semibold"><i class="bi bi-calendar-range me-1"></i>{{ d.leave_type or 'Leave' }}</div>
+                                    {% elif d.status == 'Holiday' %}
+                                        <div class="text-info fw-semibold"><i class="bi bi-gift me-1"></i>{{ d.holiday_name }}</div>
+                                    {% elif d.status == 'Weekend' %}
+                                        <div class="text-muted italic"><i class="bi bi-cup-hot me-1"></i>Weekend</div>
+                                    {% elif d.status == 'Absent' %}
+                                        <div class="text-danger"><i class="bi bi-exclamation-octagon me-1"></i>No Log</div>
+                                    {% else %}
+                                        <div class="text-muted opacity-50">-</div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+
+        {% else %}
+            <!-- All Employees Monthly Matrix Dashboard -->
+            <div class="row g-3 mb-4">
+                <div class="col-md-3">
+                    <div class="card shadow-sm border-0 border-start border-4 border-primary h-100">
+                        <div class="card-body p-3">
+                            <div class="text-muted small fw-bold mb-1">ACTIVE EMPLOYEES</div>
+                            <div class="display-6 fw-bold text-dark">{{ matrix_data.summary.total_employees }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card shadow-sm border-0 border-start border-4 border-success h-100">
+                        <div class="card-body p-3">
+                            <div class="text-muted small fw-bold mb-1">TOTAL PRESENT LOGS</div>
+                            <div class="display-6 fw-bold text-success">{{ matrix_data.summary.total_present }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card shadow-sm border-0 border-start border-4 border-danger h-100">
+                        <div class="card-body p-3">
+                            <div class="text-muted small fw-bold mb-1">TOTAL ABSENT DAYS</div>
+                            <div class="display-6 fw-bold text-danger">{{ matrix_data.summary.total_absent }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card shadow-sm border-0 border-start border-4 border-info h-100">
+                        <div class="card-body p-3">
+                            <div class="text-muted small fw-bold mb-1">AVG ATTENDANCE RATE</div>
+                            <div class="display-6 fw-bold text-info">{{ matrix_data.summary.avg_attendance_rate }}%</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Monthly Attendance Matrix Table Card -->
+            <div class="card shadow-sm border-0 mb-4">
+                <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <div>
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-table me-2 text-primary"></i>Monthly Attendance Summary Matrix ({{ matrix_data.month_name }} {{ matrix_data.year }})</h5>
+                        <div class="text-muted small">Click any employee name to open their individual calendar.</div>
+                    </div>
+                    <div class="d-flex gap-2 flex-wrap small">
+                        <span class="badge bg-success p-2">P = Present</span>
+                        <span class="badge bg-danger p-2">A = Absent</span>
+                        <span class="badge bg-warning text-dark p-2">L = Leave</span>
+                        <span class="badge bg-info text-dark p-2">H = Holiday</span>
+                        <span class="badge bg-secondary p-2">W = Weekend</span>
+                    </div>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-bordered table-hover align-middle mb-0 attendance-matrix-table">
+                            <thead class="table-light text-center small">
+                                <tr>
+                                    <th class="text-start sticky-col" style="min-width: 180px;">Employee</th>
+                                    <th style="min-width: 100px;">Dept</th>
+                                    {% for day_num in matrix_data.day_numbers %}
+                                        <th style="min-width: 32px; padding: 4px;">{{ day_num }}</th>
+                                    {% endfor %}
+                                    <th class="bg-success text-white" style="min-width: 45px;">P</th>
+                                    <th class="bg-danger text-white" style="min-width: 45px;">A</th>
+                                    <th class="bg-warning text-dark" style="min-width: 45px;">L</th>
+                                    <th class="bg-primary text-white" style="min-width: 60px;">Hours</th>
+                                </tr>
+                            </thead>
+                            <tbody class="small">
+                                {% for emp in matrix_data.employees %}
+                                    <tr>
+                                        <td class="fw-bold sticky-col bg-white">
+                                            <a href="{{ url_for('admin_attendance', year=year, month=month, user_id=emp.user_id) }}" class="text-primary text-decoration-none" title="Click to view full calendar">
+                                                {{ emp.name }}
+                                            </a>
+                                        </td>
+                                        <td class="text-muted text-center">{{ emp.department }}</td>
+                                        {% for d in emp.days %}
+                                            <td class="text-center p-1" title="{{ d.date }}: {{ d.status_label }}">
+                                                {% if d.status_code == 'P' %}
+                                                    <span class="badge bg-success w-100 py-1">P</span>
+                                                {% elif d.status_code == 'A' %}
+                                                    <span class="badge bg-danger w-100 py-1">A</span>
+                                                {% elif d.status_code == 'L' or d.status_code == 'PL' %}
+                                                    <span class="badge bg-warning text-dark w-100 py-1">L</span>
+                                                {% elif d.status_code == 'H' %}
+                                                    <span class="badge bg-info text-dark w-100 py-1">H</span>
+                                                {% elif d.status_code == 'W' %}
+                                                    <span class="badge bg-secondary opacity-50 w-100 py-1">W</span>
+                                                {% else %}
+                                                    <span class="text-muted opacity-25">-</span>
+                                                {% endif %}
+                                            </td>
+                                        {% endfor %}
+                                        <td class="text-center fw-bold text-success bg-light">{{ emp.stats.present_count }}</td>
+                                        <td class="text-center fw-bold text-danger bg-light">{{ emp.stats.absent_count }}</td>
+                                        <td class="text-center fw-bold text-warning bg-light">{{ emp.stats.leave_count }}</td>
+                                        <td class="text-center fw-bold text-primary bg-light">{{ emp.stats.total_hours }}</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        {% endif %}
+        {% endblock %}
         """,
-        rows=rows,
+        employees_list=employees_list,
+        single_cal_data=single_cal_data,
+        matrix_data=matrix_data,
+        selected_user_id=selected_user_id,
+        year=year,
+        month=month,
+        today_year=today.year,
+        today_month=today.month,
     )
+
+
+@app.route("/api/attendance/calendar-events")
+@login_required
+def api_attendance_calendar_events():
+    """API Endpoint returning JSON attendance calendar data for dynamic client-side rendering."""
+    today = datetime.date.today()
+    year = request.args.get("year", type=int, default=today.year)
+    month = request.args.get("month", type=int, default=today.month)
+    target_user_id = request.args.get("user_id", type=int, default=current_user.id)
+
+    # Permission check: Non-admin can only request their own user_id
+    if current_user.role != "admin" and target_user_id != current_user.id:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    cal_data = get_monthly_attendance_calendar_data(year, month, target_user_id)
+    return jsonify(cal_data)
 
 
 @app.route("/admin/users")
