@@ -1,3 +1,4 @@
+// timezone cache refresh
 (() => {
   const sidebar = document.getElementById('appSidebar');
   const toggle = document.querySelector('.sidebar-toggle');
