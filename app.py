@@ -55,6 +55,7 @@ from flask_login import (
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 import datetime
+from zoneinfo import ZoneInfo
 import io
 
 app = Flask(__name__)
@@ -610,7 +611,11 @@ def ensure_notifications_table():
 def create_notification(user_id, title, message, link=None):
     """Helper to push an in-app notification to a specific user (by user_id)."""
     try:
-        created_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # noqa: DTZ005  # Preserving local naive datetime formatting
+        try:
+            tz = ZoneInfo("Asia/Kolkata")
+        except Exception:  # noqa: BLE001  # Fallback when tzdata database is absent
+            tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+        created_at = datetime.datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
         with get_db() as conn:
             conn.execute(
                 """
