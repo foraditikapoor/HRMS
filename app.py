@@ -2876,7 +2876,7 @@ def create_user():
 @app.route("/attendance/punch-in", methods=["POST"])
 @login_required
 def punch_in():
-    today = datetime.date.today().isoformat()  # noqa: DTZ011  # Naive date check
+    today = datetime.datetime.now(IST).date().isoformat()
     user_id = current_user.id
     username = current_user.username
     with get_db() as conn:
@@ -2887,7 +2887,7 @@ def punch_in():
         if existing and existing["punch_in_time"]:
             flash("You have already punched in today.", "warning")
             return redirect(url_for("dashboard"))
-        now = datetime.datetime.now().isoformat()  # noqa: DTZ005  # Naive datetime for punch in
+        now = datetime.datetime.now(IST).isoformat()
         if existing:
             conn.execute(
                 "UPDATE attendance SET punch_in_time = ? WHERE id = ?",
@@ -2912,7 +2912,7 @@ def punch_in():
 @app.route("/attendance/punch-out", methods=["POST"])
 @login_required
 def punch_out():
-    today = datetime.date.today().isoformat()  # noqa: DTZ011  # Naive date check
+    today = datetime.datetime.now(IST).date().isoformat()
     user_id = current_user.id
     now_dt = datetime.datetime.now(IST)
     now = now_dt.isoformat()
