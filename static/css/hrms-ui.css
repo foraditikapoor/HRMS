@@ -180,6 +180,14 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: Int
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
 }
 
+.clickable-day-cell {
+    cursor: pointer;
+}
+
+.clickable-day-cell:hover {
+    transform: translateY(-2px);
+}
+
 .calendar-day-cell.empty {
     background: transparent;
     border: 1px dashed var(--line);

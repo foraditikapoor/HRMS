@@ -3046,8 +3046,21 @@ def logout():
     return redirect(url_for("index"))
 
 
+def is_late_punch(punch_in_str):
+    """Check if punch in time is after 09:30 AM IST standard start time."""
+    if not punch_in_str:
+        return False
+    try:
+        dt = datetime.datetime.fromisoformat(punch_in_str.strip())
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(IST)
+        return (dt.hour > 9) or (dt.hour == 9 and dt.minute > 30)
+    except Exception:
+        return False
+
+
 def get_monthly_attendance_calendar_data(year, month, target_user_id):
-    """Calculate and return monthly attendance calendar days and statistics for a given user."""
+    """Calculate and return monthly attendance calendar days, statistics, late arrivals, and modal metadata."""
     num_days = calendar.monthrange(year, month)[1]
     first_weekday = calendar.monthrange(year, month)[0]  # 0 = Monday ... 6 = Sunday
     start_date_str = f"{year:04d}-{month:02d}-01"
@@ -3070,15 +3083,15 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
         att_dict = {r["date"]: r for r in att_rows}
 
         leave_rows = conn.execute(
-            "SELECT leave_type, start_date, end_date, status FROM leave_requests WHERE user_id = ? AND status IN ('Approved', 'Pending') AND start_date <= ? AND end_date >= ?",
+            "SELECT leave_type, start_date, end_date, status, reason FROM leave_requests WHERE user_id = ? AND status IN ('Approved', 'Pending') AND start_date <= ? AND end_date >= ?",
             (target_user_id, end_date_str, start_date_str),
         ).fetchall()
 
         holiday_rows = conn.execute(
-            "SELECT date, title FROM holidays WHERE date >= ? AND date <= ?",
+            "SELECT date, title, description FROM holidays WHERE date >= ? AND date <= ?",
             (start_date_str, end_date_str),
         ).fetchall()
-        holiday_dict = {r["date"]: r["title"] for r in holiday_rows}
+        holiday_dict = {r["date"]: r for r in holiday_rows}
 
     def get_leave_for_date(d_str):
         for l in leave_rows:
@@ -3091,6 +3104,7 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
     absent_count = 0
     leave_count = 0
     holiday_count = 0
+    late_count = 0
     total_hours_sum = 0.0
 
     for day in range(1, num_days + 1):
@@ -3101,12 +3115,13 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
 
         att_entry = att_dict.get(d_str)
         leave_entry = get_leave_for_date(d_str)
-        holiday_name = holiday_dict.get(d_str)
+        holiday_entry = holiday_dict.get(d_str)
 
         status = "Future"
         status_code = "F"
         status_label = "Upcoming"
         badge_class = "bg-light text-muted border"
+        is_late = False
 
         if att_entry and att_entry["punch_in_time"]:
             status = "Present"
@@ -3114,6 +3129,9 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
             status_label = "Present"
             badge_class = "bg-success text-white"
             present_count += 1
+            if is_late_punch(att_entry["punch_in_time"]):
+                is_late = True
+                late_count += 1
             if att_entry["total_hours"]:
                 try:
                     total_hours_sum += float(att_entry["total_hours"])
@@ -3131,11 +3149,11 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
             status_label = f"Pending Leave ({leave_entry['leave_type']})"
             badge_class = "bg-warning bg-opacity-50 text-dark"
             leave_count += 1
-        elif holiday_name:
+        elif holiday_entry:
             status = "Holiday"
             status_code = "H"
-            status_label = f"Holiday ({holiday_name})"
-            badge_class = "bg-info text-dark"
+            status_label = f"Holiday ({holiday_entry['title']})"
+            badge_class = "bg-primary text-white"
             holiday_count += 1
         elif is_weekend:
             status = "Weekend"
@@ -3150,22 +3168,47 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
             badge_class = "bg-danger text-white"
             absent_count += 1
 
+        # Format timestamps for date click modal popup
+        in_fmt = format_attendance_timestamp(att_entry["punch_in_time"]) if att_entry else "-"
+        out_fmt = format_attendance_timestamp(att_entry["punch_out_time"]) if att_entry else "-"
+        hrs_fmt = (
+            f"{att_entry['total_hours']} Hours"
+            if att_entry and att_entry["total_hours"]
+            else (
+                "Active Session"
+                if att_entry and att_entry["punch_in_time"] and not att_entry["punch_out_time"]
+                else "-"
+            )
+        )
+
+        notes_txt = ""
+        if leave_entry:
+            notes_txt = f"Leave Reason: {leave_entry.get('reason') or leave_entry['leave_type']}"
+        elif holiday_entry:
+            notes_txt = f"Holiday Details: {holiday_entry.get('description') or holiday_entry['title']}"
+
         days_list.append(
             {
                 "day": day,
                 "date": d_str,
-                "weekday_name": d_obj.strftime("%a"),
+                "date_formatted": d_obj.strftime("%d %b %Y"),
+                "weekday_name": d_obj.strftime("%A"),
                 "is_weekend": is_weekend,
                 "is_today": (d_str == today_str),
                 "status": status,
                 "status_code": status_code,
                 "status_label": status_label,
                 "badge_class": badge_class,
+                "is_late": is_late,
                 "punch_in": att_entry["punch_in_time"] if att_entry else None,
+                "punch_in_fmt": in_fmt,
                 "punch_out": att_entry["punch_out_time"] if att_entry else None,
+                "punch_out_fmt": out_fmt,
                 "total_hours": att_entry["total_hours"] if att_entry else None,
+                "total_hours_fmt": hrs_fmt,
                 "leave_type": leave_entry["leave_type"] if leave_entry else None,
-                "holiday_name": holiday_name,
+                "holiday_name": holiday_entry["title"] if holiday_entry else None,
+                "notes": notes_txt,
             }
         )
 
@@ -3204,6 +3247,7 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
             "absent_count": absent_count,
             "leave_count": leave_count,
             "holiday_count": holiday_count,
+            "late_count": late_count,
             "total_hours": round(total_hours_sum, 2),
             "attendance_rate": attendance_rate,
         },
@@ -3284,13 +3328,19 @@ def employee_attendance_calendar():
     year = request.args.get("year", type=int, default=today.year)
     month = request.args.get("month", type=int, default=today.month)
 
+    # Permission Guard: Employees can ONLY view their own attendance
+    if current_user.role != "admin":
+        target_user_id = current_user.id
+    else:
+        target_user_id = request.args.get("user_id", type=int, default=current_user.id)
+
     # Sanitize month and year
     if month < 1 or month > 12:
         month = today.month
     if year < 2000 or year > 2100:
         year = today.year
 
-    cal_data = get_monthly_attendance_calendar_data(year, month, current_user.id)
+    cal_data = get_monthly_attendance_calendar_data(year, month, target_user_id)
 
     return render_template_string(
         """
@@ -3316,74 +3366,61 @@ def employee_attendance_calendar():
             </div>
         </div>
 
-        <!-- Metric Stat Cards -->
+        <!-- 5 Summary Widgets -->
         <div class="row g-3 mb-4">
-            <div class="col-6 col-md-4 col-lg-2">
+            <div class="col-6 col-md-4 col-lg flex-fill">
                 <div class="card shadow-sm border-0 border-start border-4 border-success h-100">
                     <div class="card-body p-3 text-center">
-                        <div class="text-muted small fw-bold mb-1">PRESENT</div>
+                        <div class="text-muted small fw-bold mb-1"><i class="bi bi-check-circle me-1 text-success"></i>PRESENT DAYS</div>
                         <div class="display-6 fw-bold text-success">{{ cal_data.stats.present_count }}</div>
-                        <div class="small text-muted">Days</div>
                     </div>
                 </div>
             </div>
-            <div class="col-6 col-md-4 col-lg-2">
+            <div class="col-6 col-md-4 col-lg flex-fill">
                 <div class="card shadow-sm border-0 border-start border-4 border-danger h-100">
                     <div class="card-body p-3 text-center">
-                        <div class="text-muted small fw-bold mb-1">ABSENT</div>
+                        <div class="text-muted small fw-bold mb-1"><i class="bi bi-x-circle me-1 text-danger"></i>ABSENT DAYS</div>
                         <div class="display-6 fw-bold text-danger">{{ cal_data.stats.absent_count }}</div>
-                        <div class="small text-muted">Days</div>
                     </div>
                 </div>
             </div>
-            <div class="col-6 col-md-4 col-lg-2">
+            <div class="col-6 col-md-4 col-lg flex-fill">
                 <div class="card shadow-sm border-0 border-start border-4 border-warning h-100">
                     <div class="card-body p-3 text-center">
-                        <div class="text-muted small fw-bold mb-1">LEAVES</div>
+                        <div class="text-muted small fw-bold mb-1"><i class="bi bi-calendar-minus me-1 text-warning"></i>LEAVE DAYS</div>
                         <div class="display-6 fw-bold text-warning">{{ cal_data.stats.leave_count }}</div>
-                        <div class="small text-muted">Approved</div>
                     </div>
                 </div>
             </div>
-            <div class="col-6 col-md-4 col-lg-2">
-                <div class="card shadow-sm border-0 border-start border-4 border-info h-100">
+            <div class="col-6 col-md-4 col-lg flex-fill">
+                <div class="card shadow-sm border-0 border-start border-4 border-orange h-100" style="border-left-color: #f97316 !important;">
                     <div class="card-body p-3 text-center">
-                        <div class="text-muted small fw-bold mb-1">HOLIDAYS</div>
-                        <div class="display-6 fw-bold text-info">{{ cal_data.stats.holiday_count }}</div>
-                        <div class="small text-muted">Off Days</div>
+                        <div class="text-muted small fw-bold mb-1" style="color: #f97316;"><i class="bi bi-alarm me-1"></i>LATE ARRIVALS</div>
+                        <div class="display-6 fw-bold" style="color: #f97316;">{{ cal_data.stats.late_count }}</div>
                     </div>
                 </div>
             </div>
-            <div class="col-6 col-md-4 col-lg-2">
+            <div class="col-6 col-md-4 col-lg flex-fill">
                 <div class="card shadow-sm border-0 border-start border-4 border-primary h-100">
                     <div class="card-body p-3 text-center">
-                        <div class="text-muted small fw-bold mb-1">TOTAL HOURS</div>
-                        <div class="display-6 fw-bold text-primary">{{ cal_data.stats.total_hours }}</div>
-                        <div class="small text-muted">Logged</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-6 col-md-4 col-lg-2">
-                <div class="card shadow-sm border-0 border-start border-4 border-secondary h-100">
-                    <div class="card-body p-3 text-center">
-                        <div class="text-muted small fw-bold mb-1">ATTENDANCE %</div>
-                        <div class="display-6 fw-bold text-dark">{{ cal_data.stats.attendance_rate }}%</div>
-                        <div class="small text-muted">Rate</div>
+                        <div class="text-muted small fw-bold mb-1"><i class="bi bi-graph-up me-1 text-primary"></i>ATTENDANCE %</div>
+                        <div class="display-6 fw-bold text-primary">{{ cal_data.stats.attendance_rate }}%</div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Attendance Calendar Container -->
+        <!-- Color Legend Bar & Calendar Container -->
         <div class="card shadow-sm border-0 mb-4">
-            <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+            <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
                 <h5 class="card-title mb-0 fw-bold"><i class="bi bi-grid-3x3-gap me-2 text-primary"></i>Month Grid View</h5>
-                <div class="d-flex gap-2 flex-wrap text-muted small">
-                    <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Present</span>
-                    <span class="badge bg-danger"><i class="bi bi-x-circle me-1"></i>Absent</span>
-                    <span class="badge bg-warning text-dark"><i class="bi bi-calendar-minus me-1"></i>Leave</span>
-                    <span class="badge bg-info text-dark"><i class="bi bi-star me-1"></i>Holiday</span>
-                    <span class="badge bg-secondary opacity-75"><i class="bi bi-cup-hot me-1"></i>Weekend</span>
+                <div class="d-flex gap-3 flex-wrap align-items-center text-muted small">
+                    <span class="fw-bold me-1 text-dark">Color Legend:</span>
+                    <span><span class="badge bg-success p-2 me-1">Green</span> Present</span>
+                    <span><span class="badge bg-danger p-2 me-1">Red</span> Absent</span>
+                    <span><span class="badge bg-warning text-dark p-2 me-1">Yellow</span> Leave</span>
+                    <span><span class="badge bg-primary p-2 me-1">Blue</span> Holiday</span>
+                    <span><span class="badge bg-secondary p-2 me-1">Gray</span> Weekend</span>
                 </div>
             </div>
             <div class="card-body p-3">
@@ -3404,18 +3441,26 @@ def employee_attendance_calendar():
 
                     <!-- Days of Month -->
                     {% for d in cal_data.days %}
-                        <div class="calendar-day-cell {% if d.is_today %}today-cell{% endif %} {% if d.is_weekend %}weekend-cell{% endif %}">
+                        <div class="calendar-day-cell {% if d.is_today %}today-cell{% endif %} {% if d.is_weekend %}weekend-cell{% endif %} clickable-day-cell"
+                             onclick="openAttendanceModal(this)"
+                             data-date="{{ d.date_formatted }}"
+                             data-weekday="{{ d.weekday_name }}"
+                             data-status="{{ d.status }}"
+                             data-badge="{{ d.badge_class }}"
+                             data-punchin="{{ d.punch_in_fmt }}"
+                             data-punchout="{{ d.punch_out_fmt }}"
+                             data-hours="{{ d.total_hours_fmt }}"
+                             data-late="{{ '1' if d.is_late else '0' }}"
+                             data-notes="{{ d.notes }}">
                             <div class="day-header d-flex justify-content-between align-items-center mb-2">
-                                <span class="day-number {% if d.is_today %}badge bg-primary rounded-pill{% else %}fw-bold{% endif %}">{{ d.day }}</span>
+                                <span class="day-number {% if d.is_today %}badge bg-primary rounded-pill px-2 py-1{% else %}fw-bold{% endif %}">{{ d.day }}</span>
                                 <span class="badge {{ d.badge_class }} small-badge">{{ d.status }}</span>
                             </div>
                             <div class="day-body small">
                                 {% if d.status == 'Present' %}
-                                    <div class="text-success fw-semibold"><i class="bi bi-clock me-1"></i>In: {{ d.punch_in | format_timestamp }}</div>
-                                    {% if d.punch_out %}
-                                        <div class="text-muted"><i class="bi bi-clock-history me-1"></i>Out: {{ d.punch_out | format_timestamp }}</div>
-                                    {% else %}
-                                        <div class="text-warning small"><i class="bi bi-dash-circle me-1"></i>Active</div>
+                                    <div class="text-success fw-semibold"><i class="bi bi-clock me-1"></i>In: {{ d.punch_in_fmt }}</div>
+                                    {% if d.is_late %}
+                                        <span class="badge bg-warning text-dark border style-badge mt-1"><i class="bi bi-alarm me-1"></i>Late</span>
                                     {% endif %}
                                     {% if d.total_hours %}
                                         <div class="badge bg-light text-dark border mt-1"><i class="bi bi-hourglass-split me-1"></i>{{ d.total_hours }} hrs</div>
@@ -3423,7 +3468,7 @@ def employee_attendance_calendar():
                                 {% elif d.status == 'Leave' or d.status == 'Pending Leave' %}
                                     <div class="text-warning fw-semibold"><i class="bi bi-calendar-range me-1"></i>{{ d.leave_type or 'Leave' }}</div>
                                 {% elif d.status == 'Holiday' %}
-                                    <div class="text-info fw-semibold"><i class="bi bi-gift me-1"></i>{{ d.holiday_name }}</div>
+                                    <div class="text-primary fw-semibold"><i class="bi bi-gift me-1"></i>{{ d.holiday_name }}</div>
                                 {% elif d.status == 'Weekend' %}
                                     <div class="text-muted italic"><i class="bi bi-cup-hot me-1"></i>Weekend</div>
                                 {% elif d.status == 'Absent' %}
@@ -3437,6 +3482,107 @@ def employee_attendance_calendar():
                 </div>
             </div>
         </div>
+
+        <!-- Date Detail Modal Popup -->
+        <div class="modal fade" id="attendanceDayModal" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content shadow-lg border-0 rounded-4">
+                    <div class="modal-header bg-light py-3 border-bottom">
+                        <h5 class="modal-header-title mb-0 fw-bold">
+                            <i class="bi bi-calendar-event me-2 text-primary"></i><span id="modalDateTitle">Date Details</span>
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body p-4">
+                        <div class="d-flex justify-content-between align-items-center mb-4 p-3 bg-light rounded border">
+                            <div>
+                                <span class="text-muted small d-block">WEEKDAY</span>
+                                <h4 class="fw-bold mb-0 text-dark" id="modalWeekday">Monday</h4>
+                            </div>
+                            <span id="modalStatusBadge" class="badge fs-6 px-3 py-2">Present</span>
+                        </div>
+
+                        <div id="modalLateAlert" class="alert alert-warning py-2 mb-3 d-none">
+                            <i class="bi bi-exclamation-triangle-fill me-2"></i><strong>Late Arrival:</strong> Punched in after 09:30 AM.
+                        </div>
+
+                        <div class="row g-3 text-center mb-3">
+                            <div class="col-6">
+                                <div class="p-3 border rounded bg-white shadow-sm">
+                                    <i class="bi bi-box-arrow-in-right fs-4 text-success d-block mb-1"></i>
+                                    <span class="text-muted small d-block">CHECK IN</span>
+                                    <strong id="modalPunchIn" class="fs-6 text-dark">-</strong>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="p-3 border rounded bg-white shadow-sm">
+                                    <i class="bi bi-box-arrow-right fs-4 text-danger d-block mb-1"></i>
+                                    <span class="text-muted small d-block">CHECK OUT</span>
+                                    <strong id="modalPunchOut" class="fs-6 text-dark">-</strong>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="p-3 border rounded bg-light mb-3 text-center">
+                            <span class="text-muted small d-block mb-1">TOTAL LOGGED HOURS</span>
+                            <h3 id="modalHours" class="fw-bold text-primary mb-0">0 Hours</h3>
+                        </div>
+
+                        <div id="modalNotesContainer" class="p-3 bg-white border rounded d-none">
+                            <span class="text-muted small d-block fw-bold mb-1">NOTES / DETAILS</span>
+                            <p id="modalNotesText" class="mb-0 small text-dark"></p>
+                        </div>
+                    </div>
+                    <div class="modal-footer bg-light border-0 py-2">
+                        <button type="button" class="btn btn-secondary btn-sm px-4" data-bs-dismiss="modal">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script>
+        function openAttendanceModal(el) {
+            var date = el.getAttribute('data-date');
+            var weekday = el.getAttribute('data-weekday');
+            var status = el.getAttribute('data-status');
+            var badgeClass = el.getAttribute('data-badge');
+            var punchIn = el.getAttribute('data-punchin');
+            var punchOut = el.getAttribute('data-punchout');
+            var hours = el.getAttribute('data-hours');
+            var isLate = el.getAttribute('data-late') === '1';
+            var notes = el.getAttribute('data-notes');
+
+            document.getElementById('modalDateTitle').innerText = date;
+            document.getElementById('modalWeekday').innerText = weekday;
+            
+            var badgeEl = document.getElementById('modalStatusBadge');
+            badgeEl.className = 'badge fs-6 px-3 py-2 ' + badgeClass;
+            badgeEl.innerText = status;
+
+            document.getElementById('modalPunchIn').innerText = punchIn;
+            document.getElementById('modalPunchOut').innerText = punchOut;
+            document.getElementById('modalHours').innerText = hours;
+
+            var lateAlert = document.getElementById('modalLateAlert');
+            if (isLate) {
+                lateAlert.classList.remove('d-none');
+            } else {
+                lateAlert.classList.add('d-none');
+            }
+
+            var notesContainer = document.getElementById('modalNotesContainer');
+            var notesText = document.getElementById('modalNotesText');
+            if (notes && notes.trim() !== '') {
+                notesText.innerText = notes;
+                notesContainer.classList.remove('d-none');
+            } else {
+                notesContainer.classList.add('d-none');
+            }
+
+            var myModal = new bootstrap.Modal(document.getElementById('attendanceDayModal'));
+            myModal.show();
+        }
+        </script>
         {% endblock %}
         """,
         cal_data=cal_data,
@@ -3557,68 +3703,62 @@ def admin_attendance():
                 </a>
             </div>
 
-            <!-- Single Employee Metric Stat Cards -->
+            <!-- 5 Summary Widgets for Selected Employee -->
             <div class="row g-3 mb-4">
-                <div class="col-6 col-md-4 col-lg-2">
+                <div class="col-6 col-md-4 col-lg flex-fill">
                     <div class="card shadow-sm border-0 border-start border-4 border-success h-100">
                         <div class="card-body p-3 text-center">
-                            <div class="text-muted small fw-bold mb-1">PRESENT</div>
+                            <div class="text-muted small fw-bold mb-1"><i class="bi bi-check-circle me-1 text-success"></i>PRESENT DAYS</div>
                             <div class="display-6 fw-bold text-success">{{ single_cal_data.stats.present_count }}</div>
-                            <div class="small text-muted">Days</div>
                         </div>
                     </div>
                 </div>
-                <div class="col-6 col-md-4 col-lg-2">
+                <div class="col-6 col-md-4 col-lg flex-fill">
                     <div class="card shadow-sm border-0 border-start border-4 border-danger h-100">
                         <div class="card-body p-3 text-center">
-                            <div class="text-muted small fw-bold mb-1">ABSENT</div>
+                            <div class="text-muted small fw-bold mb-1"><i class="bi bi-x-circle me-1 text-danger"></i>ABSENT DAYS</div>
                             <div class="display-6 fw-bold text-danger">{{ single_cal_data.stats.absent_count }}</div>
-                            <div class="small text-muted">Days</div>
                         </div>
                     </div>
                 </div>
-                <div class="col-6 col-md-4 col-lg-2">
+                <div class="col-6 col-md-4 col-lg flex-fill">
                     <div class="card shadow-sm border-0 border-start border-4 border-warning h-100">
                         <div class="card-body p-3 text-center">
-                            <div class="text-muted small fw-bold mb-1">LEAVES</div>
+                            <div class="text-muted small fw-bold mb-1"><i class="bi bi-calendar-minus me-1 text-warning"></i>LEAVE DAYS</div>
                             <div class="display-6 fw-bold text-warning">{{ single_cal_data.stats.leave_count }}</div>
-                            <div class="small text-muted">Approved</div>
                         </div>
                     </div>
                 </div>
-                <div class="col-6 col-md-4 col-lg-2">
-                    <div class="card shadow-sm border-0 border-start border-4 border-info h-100">
+                <div class="col-6 col-md-4 col-lg flex-fill">
+                    <div class="card shadow-sm border-0 border-start border-4 border-orange h-100" style="border-left-color: #f97316 !important;">
                         <div class="card-body p-3 text-center">
-                            <div class="text-muted small fw-bold mb-1">HOLIDAYS</div>
-                            <div class="display-6 fw-bold text-info">{{ single_cal_data.stats.holiday_count }}</div>
-                            <div class="small text-muted">Off Days</div>
+                            <div class="text-muted small fw-bold mb-1" style="color: #f97316;"><i class="bi bi-alarm me-1"></i>LATE ARRIVALS</div>
+                            <div class="display-6 fw-bold" style="color: #f97316;">{{ single_cal_data.stats.late_count }}</div>
                         </div>
                     </div>
                 </div>
-                <div class="col-6 col-md-4 col-lg-2">
+                <div class="col-6 col-md-4 col-lg flex-fill">
                     <div class="card shadow-sm border-0 border-start border-4 border-primary h-100">
                         <div class="card-body p-3 text-center">
-                            <div class="text-muted small fw-bold mb-1">TOTAL HOURS</div>
-                            <div class="display-6 fw-bold text-primary">{{ single_cal_data.stats.total_hours }}</div>
-                            <div class="small text-muted">Logged</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-6 col-md-4 col-lg-2">
-                    <div class="card shadow-sm border-0 border-start border-4 border-secondary h-100">
-                        <div class="card-body p-3 text-center">
-                            <div class="text-muted small fw-bold mb-1">ATTENDANCE %</div>
-                            <div class="display-6 fw-bold text-dark">{{ single_cal_data.stats.attendance_rate }}%</div>
-                            <div class="small text-muted">Rate</div>
+                            <div class="text-muted small fw-bold mb-1"><i class="bi bi-graph-up me-1 text-primary"></i>ATTENDANCE %</div>
+                            <div class="display-6 fw-bold text-primary">{{ single_cal_data.stats.attendance_rate }}%</div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Calendar Grid -->
+            <!-- Calendar Grid Container -->
             <div class="card shadow-sm border-0 mb-4">
-                <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <h5 class="card-title mb-0 fw-bold"><i class="bi bi-grid-3x3-gap me-2 text-primary"></i>Month Grid View</h5>
+                    <div class="d-flex gap-3 flex-wrap align-items-center text-muted small">
+                        <span class="fw-bold me-1 text-dark">Color Legend:</span>
+                        <span><span class="badge bg-success p-2 me-1">Green</span> Present</span>
+                        <span><span class="badge bg-danger p-2 me-1">Red</span> Absent</span>
+                        <span><span class="badge bg-warning text-dark p-2 me-1">Yellow</span> Leave</span>
+                        <span><span class="badge bg-primary p-2 me-1">Blue</span> Holiday</span>
+                        <span><span class="badge bg-secondary p-2 me-1">Gray</span> Weekend</span>
+                    </div>
                 </div>
                 <div class="card-body p-3">
                     <div class="attendance-calendar-grid">
@@ -3635,18 +3775,26 @@ def admin_attendance():
                         {% endfor %}
 
                         {% for d in single_cal_data.days %}
-                            <div class="calendar-day-cell {% if d.is_today %}today-cell{% endif %} {% if d.is_weekend %}weekend-cell{% endif %}">
+                            <div class="calendar-day-cell {% if d.is_today %}today-cell{% endif %} {% if d.is_weekend %}weekend-cell{% endif %} clickable-day-cell"
+                                 onclick="openAttendanceModal(this)"
+                                 data-date="{{ d.date_formatted }}"
+                                 data-weekday="{{ d.weekday_name }}"
+                                 data-status="{{ d.status }}"
+                                 data-badge="{{ d.badge_class }}"
+                                 data-punchin="{{ d.punch_in_fmt }}"
+                                 data-punchout="{{ d.punch_out_fmt }}"
+                                 data-hours="{{ d.total_hours_fmt }}"
+                                 data-late="{{ '1' if d.is_late else '0' }}"
+                                 data-notes="{{ d.notes }}">
                                 <div class="day-header d-flex justify-content-between align-items-center mb-2">
-                                    <span class="day-number {% if d.is_today %}badge bg-primary rounded-pill{% else %}fw-bold{% endif %}">{{ d.day }}</span>
+                                    <span class="day-number {% if d.is_today %}badge bg-primary rounded-pill px-2 py-1{% else %}fw-bold{% endif %}">{{ d.day }}</span>
                                     <span class="badge {{ d.badge_class }} small-badge">{{ d.status }}</span>
                                 </div>
                                 <div class="day-body small">
                                     {% if d.status == 'Present' %}
-                                        <div class="text-success fw-semibold"><i class="bi bi-clock me-1"></i>In: {{ d.punch_in | format_timestamp }}</div>
-                                        {% if d.punch_out %}
-                                            <div class="text-muted"><i class="bi bi-clock-history me-1"></i>Out: {{ d.punch_out | format_timestamp }}</div>
-                                        {% else %}
-                                            <div class="text-warning small"><i class="bi bi-dash-circle me-1"></i>Active</div>
+                                        <div class="text-success fw-semibold"><i class="bi bi-clock me-1"></i>In: {{ d.punch_in_fmt }}</div>
+                                        {% if d.is_late %}
+                                            <span class="badge bg-warning text-dark border style-badge mt-1"><i class="bi bi-alarm me-1"></i>Late</span>
                                         {% endif %}
                                         {% if d.total_hours %}
                                             <div class="badge bg-light text-dark border mt-1"><i class="bi bi-hourglass-split me-1"></i>{{ d.total_hours }} hrs</div>
@@ -3654,7 +3802,7 @@ def admin_attendance():
                                     {% elif d.status == 'Leave' or d.status == 'Pending Leave' %}
                                         <div class="text-warning fw-semibold"><i class="bi bi-calendar-range me-1"></i>{{ d.leave_type or 'Leave' }}</div>
                                     {% elif d.status == 'Holiday' %}
-                                        <div class="text-info fw-semibold"><i class="bi bi-gift me-1"></i>{{ d.holiday_name }}</div>
+                                        <div class="text-primary fw-semibold"><i class="bi bi-gift me-1"></i>{{ d.holiday_name }}</div>
                                     {% elif d.status == 'Weekend' %}
                                         <div class="text-muted italic"><i class="bi bi-cup-hot me-1"></i>Weekend</div>
                                     {% elif d.status == 'Absent' %}
@@ -3668,6 +3816,107 @@ def admin_attendance():
                     </div>
                 </div>
             </div>
+
+            <!-- Date Detail Modal Popup for Admin -->
+            <div class="modal fade" id="attendanceDayModal" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content shadow-lg border-0 rounded-4">
+                        <div class="modal-header bg-light py-3 border-bottom">
+                            <h5 class="modal-header-title mb-0 fw-bold">
+                                <i class="bi bi-calendar-event me-2 text-primary"></i><span id="modalDateTitle">Date Details</span>
+                            </h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body p-4">
+                            <div class="d-flex justify-content-between align-items-center mb-4 p-3 bg-light rounded border">
+                                <div>
+                                    <span class="text-muted small d-block">WEEKDAY</span>
+                                    <h4 class="fw-bold mb-0 text-dark" id="modalWeekday">Monday</h4>
+                                </div>
+                                <span id="modalStatusBadge" class="badge fs-6 px-3 py-2">Present</span>
+                            </div>
+
+                            <div id="modalLateAlert" class="alert alert-warning py-2 mb-3 d-none">
+                                <i class="bi bi-exclamation-triangle-fill me-2"></i><strong>Late Arrival:</strong> Punched in after 09:30 AM.
+                            </div>
+
+                            <div class="row g-3 text-center mb-3">
+                                <div class="col-6">
+                                    <div class="p-3 border rounded bg-white shadow-sm">
+                                        <i class="bi bi-box-arrow-in-right fs-4 text-success d-block mb-1"></i>
+                                        <span class="text-muted small d-block">CHECK IN</span>
+                                        <strong id="modalPunchIn" class="fs-6 text-dark">-</strong>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="p-3 border rounded bg-white shadow-sm">
+                                        <i class="bi bi-box-arrow-right fs-4 text-danger d-block mb-1"></i>
+                                        <span class="text-muted small d-block">CHECK OUT</span>
+                                        <strong id="modalPunchOut" class="fs-6 text-dark">-</strong>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="p-3 border rounded bg-light mb-3 text-center">
+                                <span class="text-muted small d-block mb-1">TOTAL LOGGED HOURS</span>
+                                <h3 id="modalHours" class="fw-bold text-primary mb-0">0 Hours</h3>
+                            </div>
+
+                            <div id="modalNotesContainer" class="p-3 bg-white border rounded d-none">
+                                <span class="text-muted small d-block fw-bold mb-1">NOTES / DETAILS</span>
+                                <p id="modalNotesText" class="mb-0 small text-dark"></p>
+                            </div>
+                        </div>
+                        <div class="modal-footer bg-light border-0 py-2">
+                            <button type="button" class="btn btn-secondary btn-sm px-4" data-bs-dismiss="modal">Close</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <script>
+            function openAttendanceModal(el) {
+                var date = el.getAttribute('data-date');
+                var weekday = el.getAttribute('data-weekday');
+                var status = el.getAttribute('data-status');
+                var badgeClass = el.getAttribute('data-badge');
+                var punchIn = el.getAttribute('data-punchin');
+                var punchOut = el.getAttribute('data-punchout');
+                var hours = el.getAttribute('data-hours');
+                var isLate = el.getAttribute('data-late') === '1';
+                var notes = el.getAttribute('data-notes');
+
+                document.getElementById('modalDateTitle').innerText = date;
+                document.getElementById('modalWeekday').innerText = weekday;
+                
+                var badgeEl = document.getElementById('modalStatusBadge');
+                badgeEl.className = 'badge fs-6 px-3 py-2 ' + badgeClass;
+                badgeEl.innerText = status;
+
+                document.getElementById('modalPunchIn').innerText = punchIn;
+                document.getElementById('modalPunchOut').innerText = punchOut;
+                document.getElementById('modalHours').innerText = hours;
+
+                var lateAlert = document.getElementById('modalLateAlert');
+                if (isLate) {
+                    lateAlert.classList.remove('d-none');
+                } else {
+                    lateAlert.classList.add('d-none');
+                }
+
+                var notesContainer = document.getElementById('modalNotesContainer');
+                var notesText = document.getElementById('modalNotesText');
+                if (notes && notes.trim() !== '') {
+                    notesText.innerText = notes;
+                    notesContainer.classList.remove('d-none');
+                } else {
+                    notesContainer.classList.add('d-none');
+                }
+
+                var myModal = new bootstrap.Modal(document.getElementById('attendanceDayModal'));
+                myModal.show();
+            }
+            </script>
 
         {% else %}
             <!-- All Employees Monthly Matrix Dashboard -->
