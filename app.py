@@ -762,6 +762,10 @@ def format_attendance_timestamp(val):
             dt = datetime.datetime.fromisoformat(val_str)
         else:
             return "-"
+
+        if dt.tzinfo:
+            dt = dt.astimezone(IST)
+
         return dt.strftime("%d %b %Y, %I:%M %p")
     except Exception:  # noqa: BLE001  # Safe fallback for invalid timestamp strings or parsing errors
         return "-"
