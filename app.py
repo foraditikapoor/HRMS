@@ -737,6 +737,30 @@ def format_inr(amount):
         return f"₹{amount}"
 
 
+@app.template_filter("format_timestamp")
+def format_attendance_timestamp(val):
+    """Format a datetime object or ISO 8601 string timestamp into 'DD Mon YYYY, hh:mm AM/PM'.
+    Returns '-' for None, empty, or invalid timestamp values.
+    """
+    if not val:
+        return "-"
+    try:
+        if isinstance(val, datetime.datetime):
+            dt = val
+        elif isinstance(val, datetime.date):
+            dt = datetime.datetime.combine(val, datetime.time.min)
+        elif isinstance(val, str):
+            val_str = val.strip()
+            if not val_str:
+                return "-"
+            dt = datetime.datetime.fromisoformat(val_str)
+        else:
+            return "-"
+        return dt.strftime("%d %b %Y, %I:%M %p")
+    except Exception:  # noqa: BLE001  # Safe fallback for invalid timestamp strings or parsing errors
+        return "-"
+
+
 def init_db():
     with get_db() as conn:
         conn.execute(
@@ -1225,8 +1249,8 @@ def dashboard():
                     <div class="card-body">
                         <h4 class="h5">Today's Attendance</h4>
                         {% if today_row %}
-                            <p>Punch In: {{ today_row.punch_in_time or 'N/A' }}</p>
-                            <p>Punch Out: {{ today_row.punch_out_time or 'N/A' }}</p>
+                            <p>Punch In: {{ today_row.punch_in_time | format_timestamp }}</p>
+                            <p>Punch Out: {{ today_row.punch_out_time | format_timestamp }}</p>
                             <p>Total Hours: {{ today_row.total_hours or 'N/A' }}</p>
                         {% else %}
                             <p>You have not punched in today.</p>
@@ -1251,8 +1275,8 @@ def dashboard():
                                 {% for r in records %}
                                     <tr>
                                         <td>{{ r.date }}</td>
-                                        <td>{{ r.punch_in_time or '' }}</td>
-                                        <td>{{ r.punch_out_time or '' }}</td>
+                                        <td>{{ r.punch_in_time | format_timestamp }}</td>
+                                        <td>{{ r.punch_out_time | format_timestamp }}</td>
                                         <td>{{ r.total_hours or '' }}</td>
                                     </tr>
                                 {% endfor %}
@@ -3010,8 +3034,8 @@ def admin_attendance():
                                     <tr>
                                         <td>{{ r.username }}</td>
                                         <td>{{ r.date }}</td>
-                                        <td>{{ r.punch_in_time or '' }}</td>
-                                        <td>{{ r.punch_out_time or '' }}</td>
+                                        <td>{{ r.punch_in_time | format_timestamp }}</td>
+                                        <td>{{ r.punch_out_time | format_timestamp }}</td>
                                         <td>{{ r.total_hours or '' }}</td>
                                     </tr>
                                 {% endfor %}
@@ -4496,8 +4520,8 @@ def download_attendance():
             [
                 r["username"],
                 r["date"],
-                r["punch_in_time"],
-                r["punch_out_time"],
+                format_attendance_timestamp(r["punch_in_time"]),
+                format_attendance_timestamp(r["punch_out_time"]),
                 r["total_hours"],
             ]
         )
