@@ -214,5 +214,110 @@
     fetch('/api/notifications/read-all', { method: 'POST' })
       .then(() => fetchNotifications());
   };
+
+  // Habit Tracker Attendance Calendar Hover Tooltip Handler
+  document.addEventListener('DOMContentLoaded', () => {
+    let tooltipEl = document.getElementById('habitCalendarTooltip');
+    if (!tooltipEl) {
+      tooltipEl = document.createElement('div');
+      tooltipEl.id = 'habitCalendarTooltip';
+      tooltipEl.className = 'habit-calendar-tooltip';
+      document.body.appendChild(tooltipEl);
+    }
+
+    function showTooltip(e, cell) {
+      if (cell.classList.contains('empty')) return;
+
+      const date = cell.getAttribute('data-date') || '';
+      const weekday = cell.getAttribute('data-weekday') || '';
+      const status = cell.getAttribute('data-status') || 'N/A';
+      const punchin = cell.getAttribute('data-punchin') || '-';
+      const punchout = cell.getAttribute('data-punchout') || '-';
+      const hours = cell.getAttribute('data-hours') || '-';
+      const notes = cell.getAttribute('data-notes') || 'None';
+
+      let statusClass = 'future';
+      const lowerStatus = status.toLowerCase();
+      if (lowerStatus.includes('present')) statusClass = 'present';
+      else if (lowerStatus.includes('absent')) statusClass = 'absent';
+      else if (lowerStatus.includes('leave')) statusClass = 'leave';
+      else if (lowerStatus.includes('holiday')) statusClass = 'holiday';
+      else if (lowerStatus.includes('weekend')) statusClass = 'weekend';
+
+      tooltipEl.innerHTML = `
+        <div class="habit-tooltip-header">
+          <span class="habit-tooltip-date">${escapeHtml(date)} (${escapeHtml(weekday)})</span>
+          <span class="habit-tooltip-status status-${statusClass}">${escapeHtml(status)}</span>
+        </div>
+        <div class="habit-tooltip-body">
+          <div class="habit-tooltip-row">
+            <span class="label"><i class="bi bi-box-arrow-in-right me-1 text-success"></i>Punch In</span>
+            <span class="val">${escapeHtml(punchin || '-')}</span>
+          </div>
+          <div class="habit-tooltip-row">
+            <span class="label"><i class="bi bi-box-arrow-right me-1 text-danger"></i>Punch Out</span>
+            <span class="val">${escapeHtml(punchout || '-')}</span>
+          </div>
+          <div class="habit-tooltip-row">
+            <span class="label"><i class="bi bi-clock me-1 text-primary"></i>Working Hours</span>
+            <span class="val">${escapeHtml(hours || '-')}</span>
+          </div>
+          <div class="habit-tooltip-row">
+            <span class="label"><i class="bi bi-journal-text me-1 text-warning"></i>Notes</span>
+            <span class="val">${escapeHtml(notes || 'None')}</span>
+          </div>
+        </div>
+      `;
+
+      tooltipEl.classList.add('visible');
+      positionTooltip(e, cell);
+    }
+
+    function positionTooltip(e, cell) {
+      if (!tooltipEl.classList.contains('visible')) return;
+      const rect = cell.getBoundingClientRect();
+      const tooltipWidth = 250;
+      const tooltipHeight = tooltipEl.offsetHeight || 160;
+
+      let left = rect.left + rect.width / 2 - tooltipWidth / 2;
+      let top = rect.top - tooltipHeight - 10;
+
+      if (top < 10) {
+        top = rect.bottom + 10;
+      }
+      if (left < 10) left = 10;
+      if (left + tooltipWidth > window.innerWidth - 10) {
+        left = window.innerWidth - tooltipWidth - 10;
+      }
+
+      tooltipEl.style.left = `${left}px`;
+      tooltipEl.style.top = `${top}px`;
+    }
+
+    function hideTooltip() {
+      tooltipEl.classList.remove('visible');
+    }
+
+    document.addEventListener('mouseover', (e) => {
+      const cell = e.target.closest('.calendar-day-cell');
+      if (cell && !cell.classList.contains('empty')) {
+        showTooltip(e, cell);
+      }
+    });
+
+    document.addEventListener('mouseout', (e) => {
+      const cell = e.target.closest('.calendar-day-cell');
+      if (cell) {
+        hideTooltip();
+      }
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      const cell = e.target.closest('.calendar-day-cell');
+      if (cell && tooltipEl.classList.contains('visible')) {
+        positionTooltip(e, cell);
+      }
+    });
+  });
 })();
 // cache refresh 

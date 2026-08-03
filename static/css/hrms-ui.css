@@ -146,62 +146,283 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: Int
     color: #f8fafc;
 }
 
-/* Attendance Calendar Styles */
+/* Attendance Calendar - Habit Tracker Style */
 .attendance-calendar-grid {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
-    gap: 10px;
+    gap: 12px;
+    margin-top: 12px;
 }
 
 .calendar-weekday-header {
     text-align: center;
     font-weight: 700;
     font-size: 13px;
-    padding: 8px;
-    background: rgba(79, 70, 229, 0.06);
-    border-radius: 8px;
+    padding: 10px 4px;
+    background: rgba(79, 70, 229, 0.08);
+    border-radius: 10px;
     color: var(--brand);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
+/* Habit Tracker Square Tile */
 .calendar-day-cell {
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 10px;
-    min-height: 105px;
+    position: relative;
+    aspect-ratio: 1;
+    min-height: 75px;
+    border-radius: 14px;
+    padding: 0 !important;
+    margin: 0;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    border: none !important;
+    cursor: pointer;
+    user-select: none;
+}
+
+/* Empty placeholder cells */
+.calendar-day-cell.empty {
+    background: transparent !important;
+    border: 2px dashed rgba(148, 163, 184, 0.3) !important;
+    opacity: 0.4;
+    cursor: default;
+    box-shadow: none !important;
+}
+
+/* Hide detailed inner text for clean tile face */
+.calendar-day-cell .day-header {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100%;
+    height: 100%;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+.calendar-day-cell .small-badge,
+.calendar-day-cell .day-body {
+    display: none !important;
+}
+
+/* Centered Day Number */
+.calendar-day-cell .day-number {
+    font-size: 1.3rem !important;
+    font-weight: 700 !important;
+    line-height: 1 !important;
+    background: none !important;
+    color: inherit !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+}
+
+/* Status-based Full Tile Fill Colors */
+
+/* 1. GREEN = Present */
+.calendar-day-cell[data-status="Present"] {
+    background-color: #10b981 !important;
+    color: #ffffff !important;
+    box-shadow: 0 4px 10px rgba(16, 185, 129, 0.25);
+}
+.calendar-day-cell[data-status="Present"]:hover {
+    background-color: #059669 !important;
+    transform: translateY(-3px) scale(1.05);
+    box-shadow: 0 8px 18px rgba(16, 185, 129, 0.38);
+}
+
+/* 2. RED = Absent */
+.calendar-day-cell[data-status="Absent"] {
+    background-color: #ef4444 !important;
+    color: #ffffff !important;
+    box-shadow: 0 4px 10px rgba(239, 68, 68, 0.25);
+}
+.calendar-day-cell[data-status="Absent"]:hover {
+    background-color: #dc2626 !important;
+    transform: translateY(-3px) scale(1.05);
+    box-shadow: 0 8px 18px rgba(239, 68, 68, 0.38);
+}
+
+/* 3. YELLOW = Leave */
+.calendar-day-cell[data-status="Leave"],
+.calendar-day-cell[data-status="Pending Leave"] {
+    background-color: #f59e0b !important;
+    color: #ffffff !important;
+    box-shadow: 0 4px 10px rgba(245, 158, 11, 0.25);
+}
+.calendar-day-cell[data-status="Leave"]:hover,
+.calendar-day-cell[data-status="Pending Leave"]:hover {
+    background-color: #d97706 !important;
+    transform: translateY(-3px) scale(1.05);
+    box-shadow: 0 8px 18px rgba(245, 158, 11, 0.38);
+}
+
+/* 4. BLUE = Holiday */
+.calendar-day-cell[data-status="Holiday"] {
+    background-color: #3b82f6 !important;
+    color: #ffffff !important;
+    box-shadow: 0 4px 10px rgba(59, 130, 246, 0.25);
+}
+.calendar-day-cell[data-status="Holiday"]:hover {
+    background-color: #2563eb !important;
+    transform: translateY(-3px) scale(1.05);
+    box-shadow: 0 8px 18px rgba(59, 130, 246, 0.38);
+}
+
+/* 5. DARK GRAY = Weekend */
+.calendar-day-cell[data-status="Weekend"],
+.calendar-day-cell.weekend-cell:not([data-status="Present"]):not([data-status="Leave"]):not([data-status="Holiday"]) {
+    background-color: #475569 !important;
+    color: #f8fafc !important;
+    box-shadow: 0 2px 6px rgba(71, 85, 105, 0.2);
+}
+.calendar-day-cell[data-status="Weekend"]:hover {
+    background-color: #334155 !important;
+    transform: translateY(-3px) scale(1.05);
+    box-shadow: 0 6px 14px rgba(51, 65, 85, 0.3);
+}
+
+/* 6. LIGHT GRAY = Future dates / Unrecorded */
+.calendar-day-cell[data-status="Future"],
+.calendar-day-cell:not([data-status="Present"]):not([data-status="Absent"]):not([data-status="Leave"]):not([data-status="Pending Leave"]):not([data-status="Holiday"]):not([data-status="Weekend"]):not(.empty) {
+    background-color: #e2e8f0 !important;
+    color: #64748b !important;
+}
+.calendar-day-cell[data-status="Future"]:hover {
+    background-color: #cbd5e1 !important;
+    transform: translateY(-2px) scale(1.03);
+}
+
+/* Dark Mode Overrides for Habit Tracker Tiles */
+[data-bs-theme="dark"] .calendar-day-cell[data-status="Weekend"] {
+    background-color: #334155 !important;
+    color: #cbd5e1 !important;
+}
+[data-bs-theme="dark"] .calendar-day-cell[data-status="Future"],
+[data-bs-theme="dark"] .calendar-day-cell:not([data-status="Present"]):not([data-status="Absent"]):not([data-status="Leave"]):not([data-status="Pending Leave"]):not([data-status="Holiday"]):not([data-status="Weekend"]):not(.empty) {
+    background-color: #1e293b !important;
+    color: #64748b !important;
+}
+
+/* Highlight Today's Date with Outer Ring Border */
+.calendar-day-cell.today-cell {
+    box-shadow: 0 0 0 3px #ffffff, 0 0 0 6px #4f46e5, 0 8px 18px rgba(79, 70, 229, 0.45) !important;
+    z-index: 3;
+    animation: todayPulse 2.5s infinite ease-in-out;
+}
+
+@keyframes todayPulse {
+    0%, 100% {
+        box-shadow: 0 0 0 3px #ffffff, 0 0 0 6px #4f46e5, 0 8px 18px rgba(79, 70, 229, 0.45);
+    }
+    50% {
+        box-shadow: 0 0 0 3px #ffffff, 0 0 0 7px #6366f1, 0 12px 24px rgba(99, 102, 241, 0.65);
+    }
+}
+
+[data-bs-theme="dark"] .calendar-day-cell.today-cell {
+    box-shadow: 0 0 0 3px #0f172a, 0 0 0 6px #6366f1, 0 8px 18px rgba(99, 102, 241, 0.5) !important;
+}
+
+/* Late Arrival indicator dot inside tile */
+.calendar-day-cell[data-late="1"]::after {
+    content: '';
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 8px;
+    height: 8px;
+    background-color: #fbbf24;
+    border-radius: 50%;
+    box-shadow: 0 0 6px rgba(251, 191, 36, 0.9);
+}
+
+/* Habit Tracker Floating Tooltip */
+.habit-calendar-tooltip {
+    position: fixed;
+    z-index: 9999;
+    pointer-events: none;
+    background: rgba(15, 23, 42, 0.94);
+    color: #f8fafc;
+    border-radius: 12px;
+    padding: 14px 16px;
+    font-size: 13px;
+    box-shadow: 0 12px 28px -5px rgba(0, 0, 0, 0.45), 0 8px 12px -6px rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    backdrop-filter: blur(12px);
+    width: 250px;
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.habit-calendar-tooltip.visible {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+}
+
+.habit-tooltip-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    padding-bottom: 8px;
+    margin-bottom: 10px;
+}
+
+.habit-tooltip-date {
+    font-weight: 700;
+    font-size: 13px;
+    color: #f1f5f9;
+}
+
+.habit-tooltip-status {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 9px;
+    border-radius: 20px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.habit-tooltip-status.status-present { background: #10b981; color: #ffffff; }
+.habit-tooltip-status.status-absent { background: #ef4444; color: #ffffff; }
+.habit-tooltip-status.status-leave { background: #f59e0b; color: #ffffff; }
+.habit-tooltip-status.status-holiday { background: #3b82f6; color: #ffffff; }
+.habit-tooltip-status.status-weekend { background: #475569; color: #ffffff; }
+.habit-tooltip-status.status-future { background: #64748b; color: #ffffff; }
+
+.habit-tooltip-body {
     display: flex;
     flex-direction: column;
+    gap: 7px;
+}
+
+.habit-tooltip-row {
+    display: flex;
     justify-content: space-between;
-    transition: all 0.15s ease-in-out;
+    align-items: center;
+    font-size: 12px;
 }
 
-.calendar-day-cell:hover {
-    border-color: var(--brand);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+.habit-tooltip-row .label {
+    color: #94a3b8;
+    display: flex;
+    align-items: center;
 }
 
-.clickable-day-cell {
-    cursor: pointer;
-}
-
-.clickable-day-cell:hover {
-    transform: translateY(-2px);
-}
-
-.calendar-day-cell.empty {
-    background: transparent;
-    border: 1px dashed var(--line);
-    opacity: 0.3;
-    min-height: 105px;
-}
-
-.calendar-day-cell.today-cell {
-    border: 2px solid var(--brand);
-    background: rgba(79, 70, 229, 0.03);
-}
-
-.calendar-day-cell.weekend-cell {
-    background: rgba(0, 0, 0, 0.015);
+.habit-tooltip-row .val {
+    font-weight: 600;
+    color: #f8fafc;
+    text-align: right;
+    max-width: 140px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .small-badge {
@@ -221,12 +442,13 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: Int
         gap: 6px;
     }
     .calendar-day-cell {
-        min-height: 85px;
-        padding: 6px;
+        min-height: 52px;
+        border-radius: 10px;
     }
-    .day-body {
-        font-size: 11px;
+    .calendar-day-cell .day-number {
+        font-size: 1.05rem !important;
     }
 }
+
 
 
