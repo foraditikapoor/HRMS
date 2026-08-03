@@ -1366,8 +1366,8 @@ def my_tasks():
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>My Tasks</title>
             <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-            <link href="{{ url_for('static', filename='css/hrms-ui.css') }}" rel="stylesheet">
-            <script src="{{ url_for('static', filename='js/hrms-ui.js') }}"></script>
+            <link href="{{ url_for('static', filename='css/hrms-ui.css', v='1.0.1') }}" rel="stylesheet">
+            <script src="{{ url_for('static', filename='js/hrms-ui.js', v='1.0.1') }}"></script>
         </head>
         <body class="bg-light">
             <div class="container py-5">
@@ -1868,8 +1868,8 @@ def task_management():
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>Task Management</title>
             <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-            <link href="{{ url_for('static', filename='css/hrms-ui.css') }}" rel="stylesheet">
-            <script src="{{ url_for('static', filename='js/hrms-ui.js') }}"></script>
+            <link href="{{ url_for('static', filename='css/hrms-ui.css', v='1.0.1') }}" rel="stylesheet">
+            <script src="{{ url_for('static', filename='js/hrms-ui.js', v='1.0.1') }}"></script>
         </head>
         <body class="bg-light">
             <div class="container py-5">
@@ -2914,7 +2914,7 @@ def punch_in():
 def punch_out():
     today = datetime.date.today().isoformat()  # noqa: DTZ011  # Naive date check
     user_id = current_user.id
-    now_dt = datetime.datetime.now()  # noqa: DTZ005  # Naive datetime for punch out
+    now_dt = datetime.datetime.now(IST)
     now = now_dt.isoformat()
     with get_db() as conn:
         rec = conn.execute(
