@@ -58,6 +58,11 @@ import datetime
 from zoneinfo import ZoneInfo
 import io
 
+try:
+    IST = ZoneInfo("Asia/Kolkata")
+except Exception:  # noqa: BLE001  # Fallback when tzdata database is absent
+    IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key")
 app.config["DATABASE_PATH"] = os.path.join(app.instance_path, "users.db")
@@ -611,11 +616,7 @@ def ensure_notifications_table():
 def create_notification(user_id, title, message, link=None):
     """Helper to push an in-app notification to a specific user (by user_id)."""
     try:
-        try:
-            tz = ZoneInfo("Asia/Kolkata")
-        except Exception:  # noqa: BLE001  # Fallback when tzdata database is absent
-            tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
-        created_at = datetime.datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        created_at = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
         with get_db() as conn:
             conn.execute(
                 """
@@ -4639,7 +4640,7 @@ def apply_leave():
             employee_name = get_employee_name_for_user(
                 conn, current_user.id, current_user.username
             )
-            applied_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # noqa: DTZ005  # Preserving naive datetime
+            applied_date = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
 
             cursor = conn.execute(
                 """
@@ -5963,7 +5964,7 @@ def add_performance_review(user_id):
             return redirect(url_for("add_performance_review", user_id=user_id))
 
         employee_name = str(emp_user["full_name"] or emp_user["username"])
-        created_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # noqa: DTZ005  # Preserving naive datetime
+        created_at = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
 
         with get_db() as conn:
             conn.execute(
