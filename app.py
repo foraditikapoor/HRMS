@@ -802,7 +802,7 @@ def inject_user_preferences():
                         "current_user_theme": pref["theme"] or "light",
                         "current_user_sidebar_style": pref["sidebar_style"] or "default",
                     }
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
     return {
         "current_user_theme": "light",
@@ -3565,7 +3565,7 @@ def delete_employee(emp_id):
             flash("Employee not found.", "warning")
             return redirect(url_for("admin_employees"))
 
-        linked_user_id = r.get("user_id", None)
+        linked_user_id = r["user_id"]
         employee_name = r["name"]
 
         # Prevent active admin self-deletion

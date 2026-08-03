@@ -23,9 +23,7 @@ icon_path = os.path.abspath('app.ico') if os.path.exists('app.ico') else None
 
 # Try using win32com if available
 try:
-    import pythoncom
-    from win32com.client import Dispatch
-    from win32com.shell import shell, shellcon
+    from win32com.client import Dispatch  # type: ignore
 
     shell_link = Dispatch('WScript.Shell').CreateShortCut(shortcut_path)
     shell_link.Targetpath = exe_path
