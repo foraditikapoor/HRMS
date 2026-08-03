@@ -5278,7 +5278,7 @@ def approve_leave(leave_id):
                 return jsonify({"status": "error", "message": msg}), 400
             return redirect(url_for("pending_leave_requests"))
 
-        approval_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # noqa: DTZ005  # Preserving naive datetime
+        approval_date = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
         conn.execute(
             """
             UPDATE leave_requests
@@ -5352,7 +5352,7 @@ def reject_leave(leave_id):
                 return jsonify({"status": "error", "message": msg}), 400
             return redirect(url_for("pending_leave_requests"))
 
-        approval_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # noqa: DTZ005  # Preserving naive datetime
+        approval_date = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
         conn.execute(
             """
             UPDATE leave_requests
