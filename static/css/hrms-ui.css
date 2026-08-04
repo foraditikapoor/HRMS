@@ -508,10 +508,55 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: Int
         min-height: 52px;
         border-radius: 10px;
     }
-    .calendar-day-cell .day-number {
-        font-size: 1.05rem !important;
-    }
+
+/* Task Management Enhancements */
+.badge-priority-low {
+    background-color: #06b6d4 !important;
+    color: #ffffff !important;
+    font-weight: 600;
 }
+
+.badge-priority-medium {
+    background-color: #64748b !important;
+    color: #ffffff !important;
+    font-weight: 600;
+}
+
+.badge-priority-high {
+    background-color: #f59e0b !important;
+    color: #ffffff !important;
+    font-weight: 600;
+}
+
+.badge-priority-critical {
+    background-color: #dc2626 !important;
+    color: #ffffff !important;
+    font-weight: 700;
+    animation: criticalPulse 2s infinite ease-in-out;
+}
+
+@keyframes criticalPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.4); }
+    50% { box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.2); }
+}
+
+.badge-overdue {
+    background-color: #ef4444 !important;
+    color: #ffffff !important;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
+.task-progress-container {
+    background-color: #e2e8f0;
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+[data-bs-theme="dark"] .task-progress-container {
+    background-color: #334155;
+}
+
 
 
 

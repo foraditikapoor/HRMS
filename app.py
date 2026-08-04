@@ -509,6 +509,7 @@ def ensure_tasks_table():
                     estimated_hours REAL,
                     recurring_type TEXT,
                     status TEXT NOT NULL DEFAULT 'Pending',
+                    progress INTEGER DEFAULT 0,
                     completed_by TEXT,
                     completion_date TEXT
                 )
@@ -538,6 +539,11 @@ def ensure_tasks_table():
             conn.execute("ALTER TABLE tasks ADD COLUMN task_category TEXT")
         if "estimated_hours" not in existing_columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN estimated_hours REAL")
+        if "progress" not in existing_columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN progress INTEGER DEFAULT 0")
+        
+        # Migrate existing completed tasks to 100% progress
+        conn.execute("UPDATE tasks SET progress = 100 WHERE status = 'Completed' AND (progress IS NULL OR progress = 0)")
         conn.commit()
 
 
@@ -1364,10 +1370,14 @@ def my_tasks():
     if current_user.role == "admin":
         return redirect(url_for("task_management"))
 
-    today = datetime.date.today().isoformat()  # noqa: DTZ011  # Naive date check for task management
+    today = datetime.date.today().isoformat()  # noqa: DTZ011
     date_filter = (request.args.get("date_filter") or "all").strip()
     start_date = (request.args.get("start_date") or "").strip()
     end_date = (request.args.get("end_date") or "").strip()
+    status_filter = (request.args.get("status_filter") or "").strip()
+    priority_filter = (request.args.get("priority_filter") or "").strip()
+    overdue_filter = (request.args.get("overdue_filter") or "").strip()
+    q = (request.args.get("q") or "").strip()
 
     calc_start, calc_end = resolve_date_range(date_filter, start_date, end_date)
 
@@ -1380,13 +1390,29 @@ def my_tasks():
             placeholders = ", ".join("?" for _ in employee_name_filter)
             sql = f"""
                 SELECT t.id, t.title, t.task_category, t.description, t.project, t.assigned_to, t.assigned_by, t.assigned_date, t.deadline,
-                       t.priority, t.estimated_hours, t.recurring_type, t.status, t.completed_by,
+                       t.priority, t.estimated_hours, t.recurring_type, t.status, COALESCE(t.progress, 0) AS progress, t.completed_by,
                        COALESCE(SUM(l.hours_worked), 0) AS total_logged_hours
                 FROM tasks t
                 LEFT JOIN time_logs l ON l.task_id = t.id
-                WHERE t.assigned_to IN ({placeholders}) AND (t.status IS NULL OR t.status != 'Completed')
+                WHERE t.assigned_to IN ({placeholders})
             """
             params = list(employee_name_filter)
+            if status_filter:
+                sql += " AND t.status = ?"
+                params.append(status_filter)
+            if priority_filter:
+                sql += " AND t.priority = ?"
+                params.append(priority_filter)
+            if overdue_filter == "overdue":
+                sql += " AND t.deadline < ? AND (t.status IS NULL OR t.status != 'Completed')"
+                params.append(today)
+            elif overdue_filter == "not_overdue":
+                sql += " AND (t.deadline >= ? OR t.status = 'Completed')"
+                params.append(today)
+            if q:
+                sql += " AND (t.title LIKE ? OR t.description LIKE ? OR t.project LIKE ?)"
+                pattern = f"%{q}%"
+                params.extend([pattern, pattern, pattern])
             if calc_start:
                 sql += " AND t.assigned_date >= ?"
                 params.append(calc_start)
@@ -1394,8 +1420,14 @@ def my_tasks():
                 sql += " AND t.assigned_date <= ?"
                 params.append(calc_end)
 
-            sql += " GROUP BY t.id ORDER BY t.assigned_date, t.deadline, t.title"
+            sql += " GROUP BY t.id ORDER BY t.assigned_date DESC, t.deadline ASC, t.title"
             tasks = conn.execute(sql, params).fetchall()
+
+    total_tasks_count = len(tasks)
+    pending_tasks_count = sum(1 for t in tasks if t["status"] != "Completed")
+    completed_tasks_count = sum(1 for t in tasks if t["status"] == "Completed")
+    overdue_tasks_count = sum(1 for t in tasks if t["deadline"] < today and t["status"] != "Completed")
+    due_today_tasks_count = sum(1 for t in tasks if t["deadline"] == today and t["status"] != "Completed")
 
     current_tasks = []
     future_tasks = []
@@ -1410,210 +1442,231 @@ def my_tasks():
 
     return render_template_string(
         """
-        <!doctype html>
-        <html lang="en" data-bs-theme="{{ current_user_theme if current_user_theme in ['light', 'dark'] else '' }}" data-theme-preference="{{ current_user_theme or 'light' }}">
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>My Tasks</title>
-            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-            <link href="{{ url_for('static', filename='css/hrms-ui.css', v='1.0.1') }}" rel="stylesheet">
-            <script src="{{ url_for('static', filename='js/hrms-ui.js', v='1.0.1') }}"></script>
-        </head>
-        <body class="bg-light">
-            <div class="container py-5">
-                <div class="d-flex align-items-center mb-4">
-                    <h1 class="h3 me-auto mb-0">My Tasks</h1>
-                    <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}">Back</a>
+        {% extends "base.html" %}
+        {% block title %}My Tasks{% endblock %}
+        {% block page_content %}
+        <div class="container-fluid py-4">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+                <div>
+                    <h1 class="h3 mb-1"><i class="bi bi-check2-square text-primary me-2"></i>My Tasks</h1>
+                    <p class="text-muted mb-0">Manage your assigned tasks, update progress, and log working hours.</p>
                 </div>
-                {% with messages = get_flashed_messages(with_categories=true) %}
-                    {% if messages %}
-                        {% for category, message in messages %}
-                            <div class="alert alert-{{ category }}">{{ message }}</div>
-                        {% endfor %}
-                    {% endif %}
-                {% endwith %}
-
-                <div class="card shadow-sm mb-4">
-                    <div class="card-body">
-                        <form method="get" class="row g-3 align-items-end">
-                            <div class="col-md-4">
-                                <label class="form-label small fw-semibold">Date Filter</label>
-                                <select class="form-select form-select-sm" name="date_filter" id="employeeDateFilterSelect">
-                                    <option value="all" {% if date_filter == 'all' %}selected{% endif %}>All Tasks</option>
-                                    <option value="today" {% if date_filter == 'today' %}selected{% endif %}>Today</option>
-                                    <option value="last_7" {% if date_filter == 'last_7' %}selected{% endif %}>Last 7 Days</option>
-                                    <option value="last_30" {% if date_filter == 'last_30' %}selected{% endif %}>Last 30 Days</option>
-                                    <option value="this_month" {% if date_filter == 'this_month' %}selected{% endif %}>This Month</option>
-                                    <option value="custom" {% if date_filter == 'custom' %}selected{% endif %}>Custom Date Range</option>
-                                </select>
-                            </div>
-                            <div class="col-md-3">
-                                <label class="form-label small fw-semibold">Start Date</label>
-                                <input type="date" class="form-control form-control-sm" name="start_date" id="employeeStartDateInput" value="{{ start_date or '' }}">
-                            </div>
-                            <div class="col-md-3">
-                                <label class="form-label small fw-semibold">End Date</label>
-                                <input type="date" class="form-control form-control-sm" name="end_date" id="employeeEndDateInput" value="{{ end_date or '' }}">
-                            </div>
-                            <div class="col-md-2 d-flex gap-2">
-                                <button type="submit" class="btn btn-sm btn-primary w-100"><i class="bi bi-funnel me-1"></i>Filter</button>
-                                <a href="{{ url_for('my_tasks') }}" class="btn btn-sm btn-outline-secondary w-100">Reset</a>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-
-                {% if not tasks %}
-                    <div class="alert alert-info">No tasks match the selected filter criteria.</div>
-                {% endif %}
-                {% if current_tasks %}
-                    <div class="card shadow-sm mb-4">
-                        <div class="card-body">
-                            <h2 class="h5">Current Tasks</h2>
-                            {% for task in current_tasks %}
-                                <div class="border rounded p-3 mb-3">
-                                    <div class="row g-3">
-                                        <div class="col-md-8">
-                                            <h3 class="h6 mb-2">{{ task.title or '' }}</h3>
-                                            <p class="mb-1"><strong>Project:</strong> {{ task.project or '' }}</p>
-                                            <p class="mb-1"><strong>Assigned By:</strong> {{ task.assigned_by or '' }}</p>
-                                            <p class="mb-1"><strong>Assigned Date:</strong> {{ task.assigned_date or '' }}</p>
-                                            <p class="mb-1"><strong>Deadline:</strong> {{ task.deadline or '' }}</p>
-                                            <p class="mb-1"><strong>Priority:</strong> {{ task.priority or '' }}</p>
-                                            <p class="mb-1"><strong>Recurring Type:</strong> {{ task.recurring_type or 'None' }}</p>
-                                            <p class="mb-1"><strong>Status:</strong> {{ task.status or 'Pending' }}</p>
-                                            <p class="mb-1"><strong>Description:</strong> {{ task.description or '' }}</p>
-                                            <p class="mb-1"><strong>Estimated Hours:</strong> {{ '%.2f'|format(task.estimated_hours or 0) }}</p>
-                                            <p class="mb-0"><strong>Logged Hours:</strong> {{ '%.2f'|format(task.total_logged_hours or 0) }}</p>
-                                        </div>
-                                        <div class="col-md-4">
-                                            <form method="post" action="{{ url_for('update_task', task_id=task.id) }}">
-                                                <div class="mb-2">
-                                                    <label class="form-label small">Hours Worked</label>
-                                                    <input class="form-control" name="hours_worked" type="number" step="0.25" min="0">
-                                                </div>
-                                                <div class="mb-2">
-                                                    <label class="form-label small">Work Notes</label>
-                                                    <input class="form-control" name="work_notes">
-                                                </div>
-                                                <div class="mb-2">
-                                                    <label class="form-label small">Status</label>
-                                                    <select class="form-select" name="status">
-                                                        <option value="Pending" {% if task.status == 'Pending' %}selected{% endif %}>Pending</option>
-                                                        <option value="In Progress" {% if task.status == 'In Progress' %}selected{% endif %}>In Progress</option>
-                                                        <option value="Blocked" {% if task.status == 'Blocked' %}selected{% endif %}>Blocked</option>
-                                                        <option value="Completed" {% if task.status == 'Completed' %}selected{% endif %}>Completed</option>
-                                                    </select>
-                                                </div>
-                                                <button class="btn btn-primary btn-sm" type="submit">Save Update</button>
-                                            </form>
-                                        </div>
-                                    </div>
-                                </div>
-                            {% endfor %}
-                        </div>
-                    </div>
-                {% endif %}
-                {% if future_tasks %}
-                    <div class="card shadow-sm mb-4">
-                        <div class="card-body">
-                            <h2 class="h5">Future Tasks</h2>
-                            {% for task in future_tasks %}
-                                <div class="border rounded p-3 mb-3">
-                                    <div class="row g-3">
-                                        <div class="col-md-8">
-                                            <h3 class="h6 mb-2">{{ task.title or '' }}</h3>
-                                            <p class="mb-1"><strong>Project:</strong> {{ task.project or '' }}</p>
-                                            <p class="mb-1"><strong>Assigned By:</strong> {{ task.assigned_by or '' }}</p>
-                                            <p class="mb-1"><strong>Assigned Date:</strong> {{ task.assigned_date or '' }}</p>
-                                            <p class="mb-1"><strong>Deadline:</strong> {{ task.deadline or '' }}</p>
-                                            <p class="mb-1"><strong>Priority:</strong> {{ task.priority or '' }}</p>
-                                            <p class="mb-1"><strong>Recurring Type:</strong> {{ task.recurring_type or 'None' }}</p>
-                                            <p class="mb-1"><strong>Status:</strong> {{ task.status or 'Pending' }}</p>
-                                            <p class="mb-1"><strong>Description:</strong> {{ task.description or '' }}</p>
-                                            <p class="mb-1"><strong>Estimated Hours:</strong> {{ '%.2f'|format(task.estimated_hours or 0) }}</p>
-                                            <p class="mb-0"><strong>Logged Hours:</strong> {{ '%.2f'|format(task.total_logged_hours or 0) }}</p>
-                                        </div>
-                                        <div class="col-md-4">
-                                            <form method="post" action="{{ url_for('update_task', task_id=task.id) }}">
-                                                <div class="mb-2">
-                                                    <label class="form-label small">Hours Worked</label>
-                                                    <input class="form-control" name="hours_worked" type="number" step="0.25" min="0">
-                                                </div>
-                                                <div class="mb-2">
-                                                    <label class="form-label small">Work Notes</label>
-                                                    <input class="form-control" name="work_notes">
-                                                </div>
-                                                <div class="mb-2">
-                                                    <label class="form-label small">Status</label>
-                                                    <select class="form-select" name="status">
-                                                        <option value="Pending" {% if task.status == 'Pending' %}selected{% endif %}>Pending</option>
-                                                        <option value="In Progress" {% if task.status == 'In Progress' %}selected{% endif %}>In Progress</option>
-                                                        <option value="Blocked" {% if task.status == 'Blocked' %}selected{% endif %}>Blocked</option>
-                                                        <option value="Completed" {% if task.status == 'Completed' %}selected{% endif %}>Completed</option>
-                                                    </select>
-                                                </div>
-                                                <button class="btn btn-primary btn-sm" type="submit">Save Update</button>
-                                            </form>
-                                        </div>
-                                    </div>
-                                </div>
-                            {% endfor %}
-                        </div>
-                    </div>
-                {% endif %}
-                {% if recurring_tasks %}
-                    <div class="card shadow-sm">
-                        <div class="card-body">
-                            <h2 class="h5">Recurring Tasks</h2>
-                            {% for task in recurring_tasks %}
-                                <div class="border rounded p-3 mb-3">
-                                    <div class="row g-3">
-                                        <div class="col-md-8">
-                                            <h3 class="h6 mb-2">{{ task.title or '' }}</h3>
-                                            <p class="mb-1"><strong>Project:</strong> {{ task.project or '' }}</p>
-                                            <p class="mb-1"><strong>Assigned By:</strong> {{ task.assigned_by or '' }}</p>
-                                            <p class="mb-1"><strong>Assigned Date:</strong> {{ task.assigned_date or '' }}</p>
-                                            <p class="mb-1"><strong>Deadline:</strong> {{ task.deadline or '' }}</p>
-                                            <p class="mb-1"><strong>Priority:</strong> {{ task.priority or '' }}</p>
-                                            <p class="mb-1"><strong>Recurring Type:</strong> {{ task.recurring_type or 'None' }}</p>
-                                            <p class="mb-1"><strong>Status:</strong> {{ task.status or 'Pending' }}</p>
-                                            <p class="mb-1"><strong>Description:</strong> {{ task.description or '' }}</p>
-                                            <p class="mb-1"><strong>Estimated Hours:</strong> {{ '%.2f'|format(task.estimated_hours or 0) }}</p>
-                                            <p class="mb-0"><strong>Logged Hours:</strong> {{ '%.2f'|format(task.total_logged_hours or 0) }}</p>
-                                        </div>
-                                        <div class="col-md-4">
-                                            <form method="post" action="{{ url_for('update_task', task_id=task.id) }}">
-                                                <div class="mb-2">
-                                                    <label class="form-label small">Hours Worked</label>
-                                                    <input class="form-control" name="hours_worked" type="number" step="0.25" min="0">
-                                                </div>
-                                                <div class="mb-2">
-                                                    <label class="form-label small">Work Notes</label>
-                                                    <input class="form-control" name="work_notes">
-                                                </div>
-                                                <div class="mb-2">
-                                                    <label class="form-label small">Status</label>
-                                                    <select class="form-select" name="status">
-                                                        <option value="Pending" {% if task.status == 'Pending' %}selected{% endif %}>Pending</option>
-                                                        <option value="In Progress" {% if task.status == 'In Progress' %}selected{% endif %}>In Progress</option>
-                                                        <option value="Blocked" {% if task.status == 'Blocked' %}selected{% endif %}>Blocked</option>
-                                                        <option value="Completed" {% if task.status == 'Completed' %}selected{% endif %}>Completed</option>
-                                                    </select>
-                                                </div>
-                                                <button class="btn btn-primary btn-sm" type="submit">Save Update</button>
-                                            </form>
-                                        </div>
-                                    </div>
-                                </div>
-                            {% endfor %}
-                        </div>
-                    </div>
-                {% endif %}
+                <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}"><i class="bi bi-arrow-left me-1"></i>Back to Dashboard</a>
             </div>
-        </body>
-        </html>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            <!-- 5 KPI Summary Widgets -->
+            <div class="row g-3 mb-4">
+                <div class="col-6 col-md">
+                    <div class="card shadow-sm border-0 border-start border-4 border-primary h-100">
+                        <div class="card-body p-3">
+                            <div class="text-muted small fw-bold mb-1"><i class="bi bi-list-task me-1 text-primary"></i>TOTAL TASKS</div>
+                            <div class="display-6 fw-bold text-dark">{{ total_tasks_count }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md">
+                    <div class="card shadow-sm border-0 border-start border-4 border-warning h-100">
+                        <div class="card-body p-3">
+                            <div class="text-muted small fw-bold mb-1"><i class="bi bi-clock-history me-1 text-warning"></i>PENDING</div>
+                            <div class="display-6 fw-bold text-warning">{{ pending_tasks_count }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md">
+                    <div class="card shadow-sm border-0 border-start border-4 border-success h-100">
+                        <div class="card-body p-3">
+                            <div class="text-muted small fw-bold mb-1"><i class="bi bi-check-circle me-1 text-success"></i>COMPLETED</div>
+                            <div class="display-6 fw-bold text-success">{{ completed_tasks_count }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md">
+                    <div class="card shadow-sm border-0 border-start border-4 border-danger h-100">
+                        <div class="card-body p-3">
+                            <div class="text-muted small fw-bold mb-1"><i class="bi bi-exclamation-octagon me-1 text-danger"></i>OVERDUE</div>
+                            <div class="display-6 fw-bold text-danger">{{ overdue_tasks_count }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md">
+                    <div class="card shadow-sm border-0 border-start border-4 border-info h-100">
+                        <div class="card-body p-3">
+                            <div class="text-muted small fw-bold mb-1"><i class="bi bi-calendar-event me-1 text-info"></i>DUE TODAY</div>
+                            <div class="display-6 fw-bold text-info">{{ due_today_tasks_count }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Search & Filter Card -->
+            <div class="card shadow-sm border-0 mb-4">
+                <div class="card-body">
+                    <form method="get" class="row g-3 align-items-end">
+                        <div class="col-md-3">
+                            <label class="form-label small fw-bold text-muted mb-1"><i class="bi bi-search me-1"></i>Search</label>
+                            <input type="text" name="q" class="form-control form-control-sm" placeholder="Task title, project..." value="{{ q or '' }}">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small fw-bold text-muted mb-1"><i class="bi bi-flag me-1"></i>Priority</label>
+                            <select class="form-select form-select-sm" name="priority_filter">
+                                <option value="">All Priorities</option>
+                                <option value="Low" {% if priority_filter == 'Low' %}selected{% endif %}>Low</option>
+                                <option value="Medium" {% if priority_filter == 'Medium' %}selected{% endif %}>Medium</option>
+                                <option value="High" {% if priority_filter == 'High' %}selected{% endif %}>High</option>
+                                <option value="Critical" {% if priority_filter == 'Critical' %}selected{% endif %}>Critical</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small fw-bold text-muted mb-1"><i class="bi bi-activity me-1"></i>Status</label>
+                            <select class="form-select form-select-sm" name="status_filter">
+                                <option value="">All Statuses</option>
+                                <option value="Pending" {% if status_filter == 'Pending' %}selected{% endif %}>Pending</option>
+                                <option value="In Progress" {% if status_filter == 'In Progress' %}selected{% endif %}>In Progress</option>
+                                <option value="Blocked" {% if status_filter == 'Blocked' %}selected{% endif %}>Blocked</option>
+                                <option value="Completed" {% if status_filter == 'Completed' %}selected{% endif %}>Completed</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small fw-bold text-muted mb-1"><i class="bi bi-exclamation-triangle me-1"></i>Overdue Filter</label>
+                            <select class="form-select form-select-sm" name="overdue_filter">
+                                <option value="">All Tasks</option>
+                                <option value="overdue" {% if overdue_filter == 'overdue' %}selected{% endif %}>Overdue Only</option>
+                                <option value="not_overdue" {% if overdue_filter == 'not_overdue' %}selected{% endif %}>Not Overdue</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3 d-flex gap-2">
+                            <button type="submit" class="btn btn-sm btn-primary w-100"><i class="bi bi-funnel me-1"></i>Filter</button>
+                            <a href="{{ url_for('my_tasks') }}" class="btn btn-sm btn-outline-secondary w-100">Reset</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            {% if not tasks %}
+                <div class="alert alert-info shadow-sm"><i class="bi bi-info-circle me-2"></i>No tasks match the selected filter criteria.</div>
+            {% endif %}
+
+            {% macro render_task_cards(task_list, section_title) %}
+                {% if task_list %}
+                    <div class="card shadow-sm border-0 mb-4">
+                        <div class="card-header bg-white py-3 border-0">
+                            <h2 class="h5 card-title mb-0 fw-bold"><i class="bi bi-card-checklist me-2 text-primary"></i>{{ section_title }}</h2>
+                        </div>
+                        <div class="card-body p-3">
+                            {% for task in task_list %}
+                                <div class="card border mb-3 shadow-sm rounded-3">
+                                    <div class="card-body p-3">
+                                        <div class="row g-3">
+                                            <div class="col-md-7 col-lg-8">
+                                                <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
+                                                    <span class="badge bg-light text-dark border">{{ task.task_category or 'General' }}</span>
+                                                    <h3 class="h6 mb-0 fw-bold text-dark me-2">{{ task.title or '' }}</h3>
+                                                    
+                                                    <!-- Priority Badge -->
+                                                    {% if task.priority == 'Critical' %}
+                                                        <span class="badge badge-priority-critical"><i class="bi bi-exclamation-triangle-fill me-1"></i>Critical</span>
+                                                    {% elif task.priority == 'High' %}
+                                                        <span class="badge badge-priority-high"><i class="bi bi-arrow-up me-1"></i>High</span>
+                                                    {% elif task.priority == 'Medium' %}
+                                                        <span class="badge badge-priority-medium"><i class="bi bi-dash-lg me-1"></i>Medium</span>
+                                                    {% else %}
+                                                        <span class="badge badge-priority-low"><i class="bi bi-arrow-down me-1"></i>Low</span>
+                                                    {% endif %}
+
+                                                    <!-- Status Badge -->
+                                                    {% if task.status == 'Completed' %}
+                                                        <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Completed</span>
+                                                    {% elif task.status == 'In Progress' %}
+                                                        <span class="badge bg-primary"><i class="bi bi-play-circle me-1"></i>In Progress</span>
+                                                    {% elif task.status == 'Blocked' %}
+                                                        <span class="badge bg-danger"><i class="bi bi-slash-circle me-1"></i>Blocked</span>
+                                                    {% else %}
+                                                        <span class="badge bg-warning text-dark"><i class="bi bi-clock me-1"></i>Pending</span>
+                                                    {% endif %}
+
+                                                    <!-- Automatic Overdue Badge -->
+                                                    {% if task.deadline < today and task.status != 'Completed' %}
+                                                        <span class="badge badge-overdue"><i class="bi bi-clock-history me-1"></i>OVERDUE</span>
+                                                    {% endif %}
+                                                </div>
+
+                                                <div class="small text-muted mb-2">
+                                                    <span class="me-3"><i class="bi bi-building me-1 text-primary"></i><strong>Project:</strong> {{ task.project or 'N/A' }}</span>
+                                                    <span class="me-3"><i class="bi bi-person me-1 text-secondary"></i><strong>Assigned By:</strong> {{ task.assigned_by or 'Admin' }}</span>
+                                                    <span class="me-3"><i class="bi bi-calendar-event me-1 text-info"></i><strong>Due Date:</strong> {{ task.deadline or 'N/A' }}</span>
+                                                    {% if task.recurring_type %}<span class="badge bg-info text-dark ms-1"><i class="bi bi-repeat me-1"></i>{{ task.recurring_type }}</span>{% endif %}
+                                                </div>
+
+                                                {% if task.description %}
+                                                    <p class="small text-secondary mb-3 bg-light p-2 rounded border">{{ task.description }}</p>
+                                                {% endif %}
+
+                                                <!-- Progress Bar -->
+                                                <div class="mb-2">
+                                                    <div class="d-flex justify-content-between align-items-center small fw-semibold text-muted mb-1">
+                                                        <span>Task Progress</span>
+                                                        <span class="text-dark fw-bold">{{ task.progress }}%</span>
+                                                    </div>
+                                                    <div class="task-progress-container" style="height: 10px;">
+                                                        <div class="progress-bar {% if task.progress == 100 %}bg-success{% elif task.progress >= 50 %}bg-info{% else %}bg-primary{% endif %}" role="progressbar" style="width: {{ task.progress }}%; height: 100%;" aria-valuenow="{{ task.progress }}" aria-valuemin="0" aria-valuemax="100"></div>
+                                                    </div>
+                                                </div>
+
+                                                <div class="d-flex gap-3 small text-muted">
+                                                    <span><i class="bi bi-hourglass-top me-1"></i>Est: {{ '%.2f'|format(task.estimated_hours or 0) }} hrs</span>
+                                                    <span><i class="bi bi-hourglass-split me-1"></i>Logged: {{ '%.2f'|format(task.total_logged_hours or 0) }} hrs</span>
+                                                </div>
+                                            </div>
+
+                                            <div class="col-md-5 col-lg-4 border-start ps-md-3">
+                                                <h4 class="small fw-bold text-dark mb-2"><i class="bi bi-pencil-square me-1 text-primary"></i>Update Task & Progress</h4>
+                                                <form method="post" action="{{ url_for('update_task', task_id=task.id) }}">
+                                                    <div class="mb-2">
+                                                        <label class="form-label small mb-1">Progress (%): <strong class="text-primary">{{ task.progress }}%</strong></label>
+                                                        <input class="form-control form-control-sm" name="progress" type="number" min="0" max="100" value="{{ task.progress }}" placeholder="0 - 100">
+                                                    </div>
+                                                    <div class="mb-2">
+                                                        <label class="form-label small mb-1">Log Hours Worked</label>
+                                                        <input class="form-control form-control-sm" name="hours_worked" type="number" step="0.25" min="0" placeholder="e.g. 2.5">
+                                                    </div>
+                                                    <div class="mb-2">
+                                                        <label class="form-label small mb-1">Work Notes</label>
+                                                        <input class="form-control form-control-sm" name="work_notes" placeholder="Notes...">
+                                                    </div>
+                                                    <div class="mb-2">
+                                                        <label class="form-label small mb-1">Status</label>
+                                                        <select class="form-select form-select-sm" name="status">
+                                                            <option value="Pending" {% if task.status == 'Pending' %}selected{% endif %}>Pending</option>
+                                                            <option value="In Progress" {% if task.status == 'In Progress' %}selected{% endif %}>In Progress</option>
+                                                            <option value="Blocked" {% if task.status == 'Blocked' %}selected{% endif %}>Blocked</option>
+                                                            <option value="Completed" {% if task.status == 'Completed' %}selected{% endif %}>Completed</option>
+                                                        </select>
+                                                    </div>
+                                                    <button class="btn btn-primary btn-sm w-100" type="submit"><i class="bi bi-save me-1"></i>Save Progress Update</button>
+                                                </form>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                {% endif %}
+            {% endmacro %}
+
+            {{ render_task_cards(current_tasks, "Current Tasks") }}
+            {{ render_task_cards(future_tasks, "Future Tasks") }}
+            {{ render_task_cards(recurring_tasks, "Recurring Tasks") }}
+        </div>
+        {% endblock %}
         """,
         tasks=tasks,
         current_tasks=current_tasks,
@@ -1622,6 +1675,16 @@ def my_tasks():
         date_filter=date_filter,
         start_date=start_date,
         end_date=end_date,
+        status_filter=status_filter,
+        priority_filter=priority_filter,
+        overdue_filter=overdue_filter,
+        q=q,
+        today=today,
+        total_tasks_count=total_tasks_count,
+        pending_tasks_count=pending_tasks_count,
+        completed_tasks_count=completed_tasks_count,
+        overdue_tasks_count=overdue_tasks_count,
+        due_today_tasks_count=due_today_tasks_count,
     )
 
 
@@ -1634,7 +1697,7 @@ def update_task(task_id):
 
     with get_db() as conn:
         task = conn.execute(
-            "SELECT id, title, assigned_to, assigned_by, status FROM tasks WHERE id = ?",
+            "SELECT id, title, assigned_to, assigned_by, status, COALESCE(progress, 0) AS progress FROM tasks WHERE id = ?",
             (task_id,),
         ).fetchone()
         employee_names = get_user_task_names(conn, current_user)
@@ -1642,6 +1705,83 @@ def update_task(task_id):
     if task is None:
         flash("Task not found.", "warning")
         return redirect(url_for("my_tasks"))
+
+    if task["assigned_to"] not in employee_names:
+        flash("Only assigned employees may update their own tasks.", "danger")
+        return redirect(url_for("my_tasks"))
+
+    hours_worked = request.form.get("hours_worked", "").strip()
+    work_notes = request.form.get("work_notes", "").strip()
+    status = request.form.get("status", "Pending").strip()
+    progress_input = request.form.get("progress", "").strip()
+
+    progress = None
+    if progress_input != "":
+        try:
+            progress = max(0, min(100, int(progress_input)))
+        except ValueError:
+            pass
+
+    if progress is not None and progress >= 100:
+        status = "Completed"
+    elif status == "Completed":
+        progress = 100
+
+    if hours_worked:
+        try:
+            hours_value = float(hours_worked)
+        except ValueError:
+            flash("Hours must be a valid number.", "danger")
+            return redirect(url_for("my_tasks"))
+        if hours_value <= 0:
+            flash("Hours cannot be zero or negative.", "danger")
+            return redirect(url_for("my_tasks"))
+    else:
+        hours_value = None
+
+    if status not in ["Pending", "In Progress", "Blocked", "Completed"]:
+        status = "Pending"
+
+    with get_db() as conn:
+        if hours_value is not None:
+            conn.execute(
+                "INSERT INTO time_logs (task_id, user_id, logged_date, hours_worked, notes) VALUES (?, ?, ?, ?, ?)",
+                (
+                    task_id,
+                    current_user.id,
+                    datetime.date.today().isoformat(),  # noqa: DTZ011
+                    hours_value,
+                    work_notes or None,
+                ),
+            )
+        completed_by = current_user.username if status == "Completed" else None
+        completion_date = datetime.date.today().isoformat() if status == "Completed" else None  # noqa: DTZ011
+        if progress is not None:
+            conn.execute(
+                "UPDATE tasks SET status = ?, progress = ?, completed_by = ?, completion_date = ? WHERE id = ?",
+                (status, progress, completed_by, completion_date, task_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE tasks SET status = ?, completed_by = ?, completion_date = ? WHERE id = ?",
+                (status, completed_by, completion_date, task_id),
+            )
+        conn.commit()
+        if status != task["status"]:
+            notify_admins(
+                "Task Status Update",
+                f"Task '{task['title']}' status updated to '{status}' by {current_user.username}.",
+                url_for("task_management"),
+            )
+            notify_user_by_name_or_username(
+                task["assigned_by"],
+                "Task Status Update",
+                f"Task '{task['title']}' status updated to '{status}' by {current_user.username}.",
+                url_for("task_management"),
+            )
+
+    flash("Task updated successfully.", "success")
+    return redirect(url_for("my_tasks"))
 
     if task["assigned_to"] not in employee_names:
         flash("Only assigned employees may update their own tasks.", "danger")
@@ -1730,10 +1870,14 @@ def task_management():
     employee_filter = (request.args.get("employee_filter") or "").strip()
     project_filter = (request.args.get("project_filter") or "").strip()
     status_filter = (request.args.get("status_filter") or "").strip()
+    priority_filter = (request.args.get("priority_filter") or "").strip()
+    overdue_filter = (request.args.get("overdue_filter") or "").strip()
     date_filter = (request.args.get("date_filter") or "all").strip()
     start_date = (request.args.get("start_date") or "").strip()
     end_date = (request.args.get("end_date") or "").strip()
+    q = (request.args.get("q") or "").strip()
     edit_id = (request.args.get("edit_id") or "").strip()
+    today_str = datetime.date.today().isoformat()  # noqa: DTZ011
 
     calc_start, calc_end = resolve_date_range(date_filter, start_date, end_date)
 
@@ -1741,7 +1885,7 @@ def task_management():
     if edit_id:
         with get_db() as conn:
             edit_task = conn.execute(
-                "SELECT * FROM tasks WHERE id = ?",
+                "SELECT id, title, task_category, description, project, assigned_to, assigned_by, assigned_date, deadline, priority, estimated_hours, recurring_type, status, COALESCE(progress, 0) AS progress, completed_by, completion_date FROM tasks WHERE id = ?",
                 (edit_id,),
             ).fetchone()
 
@@ -1765,10 +1909,20 @@ def task_management():
         assigned_to = request.form.get("assigned_to", "").strip()
         assigned_date = request.form.get("assigned_date", "").strip()
         deadline = request.form.get("deadline", "").strip()
-        priority = request.form.get("priority", "").strip()
+        priority = request.form.get("priority", "Medium").strip()
         recurring_type = request.form.get("recurring_type", "").strip() or None
         status = request.form.get("status", "Pending").strip()
         estimated_hours_input = request.form.get("estimated_hours", "").strip()
+        progress_input = request.form.get("progress", "0").strip()
+
+        try:
+            progress = max(0, min(100, int(progress_input))) if progress_input != "" else 0
+        except ValueError:
+            progress = 0
+
+        if progress >= 100 or status == "Completed":
+            progress = 100
+            status = "Completed"
 
         if task_category not in TASK_CATEGORIES:
             flash("Select a valid task category.", "danger")
@@ -1813,7 +1967,7 @@ def task_management():
                 )
                 conn.execute(
                     """
-                    UPDATE tasks SET title=?, task_category=?, description=?, project=?, assigned_to=?, assigned_by=?, assigned_date=?, deadline=?, priority=?, estimated_hours=?, recurring_type=?, status=?, completed_by=?, completion_date=? WHERE id=?
+                    UPDATE tasks SET title=?, task_category=?, description=?, project=?, assigned_to=?, assigned_by=?, assigned_date=?, deadline=?, priority=?, estimated_hours=?, recurring_type=?, status=?, progress=?, completed_by=?, completion_date=? WHERE id=?
                     """,
                     (
                         title,
@@ -1828,6 +1982,7 @@ def task_management():
                         estimated_hours,
                         recurring_type,
                         status,
+                        progress,
                         current_user.username if status == "Completed" else None,
                         completion_date,
                         task_id,
@@ -1849,8 +2004,8 @@ def task_management():
             )
             conn.execute(
                 """
-                INSERT INTO tasks (title, task_category, description, project, assigned_to, assigned_by, assigned_date, deadline, priority, estimated_hours, recurring_type, status, completed_by, completion_date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO tasks (title, task_category, description, project, assigned_to, assigned_by, assigned_date, deadline, priority, estimated_hours, recurring_type, status, progress, completed_by, completion_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     title,
@@ -1865,6 +2020,7 @@ def task_management():
                     estimated_hours,
                     recurring_type,
                     status,
+                    progress,
                     current_user.username if status == "Completed" else None,
                     completion_date,
                 ),
@@ -1881,7 +2037,7 @@ def task_management():
 
     query = """
         SELECT t.id, t.title, t.task_category, t.description, t.project, t.assigned_to, t.assigned_by, t.assigned_date, t.deadline,
-               t.priority, COALESCE(t.estimated_hours, 0) AS estimated_hours, t.recurring_type, t.status, t.completed_by,
+               t.priority, COALESCE(t.estimated_hours, 0) AS estimated_hours, t.recurring_type, t.status, COALESCE(t.progress, 0) AS progress, t.completed_by,
                COALESCE(SUM(l.hours_worked), 0) AS total_logged_hours,
                COALESCE(t.estimated_hours, 0) - COALESCE(SUM(l.hours_worked), 0) AS remaining_hours,
                COALESCE(SUM(l.hours_worked), 0) - COALESCE(t.estimated_hours, 0) AS variance_hours
@@ -1899,6 +2055,19 @@ def task_management():
     if status_filter:
         query += " AND t.status = ?"
         params.append(status_filter)
+    if priority_filter:
+        query += " AND t.priority = ?"
+        params.append(priority_filter)
+    if overdue_filter == "overdue":
+        query += " AND t.deadline < ? AND (t.status IS NULL OR t.status != 'Completed')"
+        params.append(today_str)
+    elif overdue_filter == "not_overdue":
+        query += " AND (t.deadline >= ? OR t.status = 'Completed')"
+        params.append(today_str)
+    if q:
+        query += " AND (t.title LIKE ? OR t.description LIKE ? OR t.project LIKE ? OR t.assigned_to LIKE ?)"
+        pattern = f"%{q}%"
+        params.extend([pattern, pattern, pattern, pattern])
     if calc_start:
         query += " AND t.assigned_date >= ?"
         params.append(calc_start)
@@ -1910,303 +2079,427 @@ def task_management():
     with get_db() as conn:
         tasks = conn.execute(query, params).fetchall()
 
+    total_tasks_count = len(tasks)
+    pending_tasks_count = sum(1 for t in tasks if t["status"] != "Completed")
+    completed_tasks_count = sum(1 for t in tasks if t["status"] == "Completed")
+    overdue_tasks_count = sum(1 for t in tasks if t["deadline"] < today_str and t["status"] != "Completed")
+    due_today_tasks_count = sum(1 for t in tasks if t["deadline"] == today_str and t["status"] != "Completed")
+
     return render_template_string(
         """
-        <!doctype html>
-        <html lang="en" data-bs-theme="{{ current_user_theme if current_user_theme in ['light', 'dark'] else '' }}" data-theme-preference="{{ current_user_theme or 'light' }}">
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Task Management</title>
-            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-            <link href="{{ url_for('static', filename='css/hrms-ui.css', v='1.0.1') }}" rel="stylesheet">
-            <script src="{{ url_for('static', filename='js/hrms-ui.js', v='1.0.1') }}"></script>
-        </head>
-        <body class="bg-light">
-            <div class="container py-5">
-                <div class="d-flex align-items-center mb-4">
-                    <h1 class="h3 me-auto mb-0">Task Management</h1>
-                    <a class="btn btn-outline-primary me-2" href="{{ url_for('completed_tasks_archive') }}"><i class="bi bi-archive me-1"></i>Completed Tasks Archive</a>
-                    <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}">Back</a>
+        {% extends "base.html" %}
+        {% block title %}Task Management{% endblock %}
+        {% block page_content %}
+        <div class="container-fluid py-4">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+                <div>
+                    <h1 class="h3 mb-1"><i class="bi bi-kanban text-primary me-2"></i>Task Management</h1>
+                    <p class="text-muted mb-0">Create, assign, track employee task progress, priorities, and deadlines.</p>
                 </div>
-                {% with messages = get_flashed_messages(with_categories=true) %}
-                    {% if messages %}
-                        {% for category, message in messages %}
-                            <div class="alert alert-{{ category }}">{{ message }}</div>
-                        {% endfor %}
-                    {% endif %}
-                {% endwith %}
-                <div class="card shadow-sm mb-4">
-                    <div class="card-body">
-                        <h2 class="h5">Create / Edit Task</h2>
-                        <form method="post">
-                            <input type="hidden" name="action" value="{% if edit_task %}edit{% else %}create{% endif %}">
-                            {% if edit_task %}
-                                <input type="hidden" name="task_id" value="{{ edit_task.id }}">
-                            {% endif %}
-                            <div class="row g-3">
-                                <div class="col-md-6">
-                                    <label class="form-label">Task Category</label>
-                                    <select class="form-select" name="task_category" id="task-category" required>
-                                        <option value="">Select category</option>
-                                        {% for category in task_categories %}
-                                            <option value="{{ category }}" {% if edit_task and edit_task.task_category == category %}selected{% endif %}>{{ category }}</option>
-                                        {% endfor %}
-                                    </select>
-                                </div>
-                                <div class="col-md-6">
-                                    <label class="form-label">Task</label>
-                                    <select class="form-select" name="task_title" id="task-title" required>
-                                        <option value="">Select task</option>
-                                        {% if edit_task and edit_task.task_category and edit_task.task_category != 'Other (Custom)' %}
-                                            {% for task in task_categories.get(edit_task.task_category, []) %}
-                                                <option value="{{ task }}" {% if edit_task.title == task %}selected{% endif %}>{{ task }}</option>
-                                            {% endfor %}
-                                        {% endif %}
-                                    </select>
-                                </div>
-                                <div class="col-md-6 d-none" id="custom-task-container">
-                                    <label class="form-label">Custom Task</label>
-                                    <input class="form-control" name="custom_task_title" id="custom-task-title" value="{% if edit_task and edit_task.task_category == 'Other (Custom)' %}{{ edit_task.title }}{% endif %}">
-                                </div>
-                                <div class="col-md-6">
-                                    <label class="form-label">Project</label>
-                                    <select class="form-select" name="project" required>
-                                        <option value="">Select project</option>
-                                        {% for project in projects %}
-                                            <option value="{{ project.client_name }}" {% if edit_task and edit_task.project == project.client_name %}selected{% endif %}>{{ project.client_name }}</option>
-                                        {% endfor %}
-                                    </select>
-                                </div>
-                                <div class="col-md-6">
-                                    <label class="form-label">Assigned Employee</label>
-                                    <select class="form-select" name="assigned_to" required>
-                                        <option value="">Select employee</option>
-                                        {% for employee in employees %}
-                                            <option value="{{ employee.name }}" {% if edit_task and edit_task.assigned_to == employee.name %}selected{% endif %}>{{ employee.name }}</option>
-                                        {% endfor %}
-                                    </select>
-                                </div>
-                                <div class="col-md-6">
-                                    <label class="form-label">Priority</label>
-                                    <select class="form-select" name="priority" required>
-                                        <option value="">Select priority</option>
-                                        <option value="Low" {% if edit_task and edit_task.priority == 'Low' %}selected{% endif %}>Low</option>
-                                        <option value="Medium" {% if edit_task and edit_task.priority == 'Medium' %}selected{% endif %}>Medium</option>
-                                        <option value="High" {% if edit_task and edit_task.priority == 'High' %}selected{% endif %}>High</option>
-                                    </select>
-                                </div>
-                                <div class="col-md-6">
-                                    <label class="form-label">Estimated Hours</label>
-                                    <input class="form-control" name="estimated_hours" type="number" step="0.25" min="0.25" value="{{ edit_task.estimated_hours if edit_task and edit_task.estimated_hours is not none else '' }}" required>
-                                </div>
-                                <div class="col-md-6">
-                                    <label class="form-label">Assigned Date</label>
-                                    <input class="form-control" name="assigned_date" type="date" value="{{ edit_task.assigned_date if edit_task else '' }}" required>
-                                </div>
-                                <div class="col-md-6">
-                                    <label class="form-label">Deadline</label>
-                                    <input class="form-control" name="deadline" type="date" value="{{ edit_task.deadline if edit_task else '' }}" required>
-                                </div>
-                                <div class="col-md-6">
-                                    <label class="form-label">Recurring Type</label>
-                                    <select class="form-select" name="recurring_type">
-                                        <option value="">None</option>
-                                        <option value="Daily" {% if edit_task and edit_task.recurring_type == 'Daily' %}selected{% endif %}>Daily</option>
-                                        <option value="Weekly" {% if edit_task and edit_task.recurring_type == 'Weekly' %}selected{% endif %}>Weekly</option>
-                                        <option value="Monthly" {% if edit_task and edit_task.recurring_type == 'Monthly' %}selected{% endif %}>Monthly</option>
-                                    </select>
-                                </div>
-                                <div class="col-md-6">
-                                    <label class="form-label">Status</label>
-                                    <select class="form-select" name="status" required>
-                                        <option value="Pending" {% if edit_task and edit_task.status == 'Pending' %}selected{% endif %}>Pending</option>
-                                        <option value="In Progress" {% if edit_task and edit_task.status == 'In Progress' %}selected{% endif %}>In Progress</option>
-                                        <option value="Blocked" {% if edit_task and edit_task.status == 'Blocked' %}selected{% endif %}>Blocked</option>
-                                        <option value="Completed" {% if edit_task and edit_task.status == 'Completed' %}selected{% endif %}>Completed</option>
-                                    </select>
-                                </div>
-                                <div class="col-12">
-                                    <label class="form-label">Description</label>
-                                    <textarea class="form-control" name="description" rows="3">{{ edit_task.description if edit_task else '' }}</textarea>
-                                </div>
-                            </div>
-                            <button class="btn btn-primary mt-3" type="submit">{% if edit_task %}Save Changes{% else %}Create Task{% endif %}</button>
-                            {% if edit_task %}
-                                <a class="btn btn-outline-secondary ms-2 mt-3" href="{{ url_for('task_management') }}">Cancel</a>
-                            {% endif %}
-                        </form>
+                <div class="d-flex gap-2">
+                    <a class="btn btn-outline-primary" href="{{ url_for('completed_tasks_archive') }}"><i class="bi bi-archive me-1"></i>Completed Tasks Archive</a>
+                    <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}"><i class="bi bi-arrow-left me-1"></i>Back</a>
+                </div>
+            </div>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            <!-- 5 KPI Summary Widgets -->
+            <div class="row g-3 mb-4">
+                <div class="col-6 col-md">
+                    <div class="card shadow-sm border-0 border-start border-4 border-primary h-100">
+                        <div class="card-body p-3">
+                            <div class="text-muted small fw-bold mb-1"><i class="bi bi-list-task me-1 text-primary"></i>TOTAL TASKS</div>
+                            <div class="display-6 fw-bold text-dark">{{ total_tasks_count }}</div>
+                        </div>
                     </div>
                 </div>
-                <div class="card shadow-sm">
-                    <div class="card-body">
-                        <h2 class="h5">Filter Tasks</h2>
-                        <form method="get" class="row g-3 align-items-end">
-                            <div class="col-md-2">
-                                <label class="form-label small fw-semibold">Employee</label>
-                                <select class="form-select form-select-sm" name="employee_filter">
-                                    <option value="">All</option>
-                                    {% for employee in employees %}
-                                        <option value="{{ employee.name }}" {% if employee_filter == employee.name %}selected{% endif %}>{{ employee.name }}</option>
-                                    {% endfor %}
-                                </select>
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label small fw-semibold">Project</label>
-                                <select class="form-select form-select-sm" name="project_filter">
-                                    <option value="">All</option>
-                                    {% for project in projects %}
-                                        <option value="{{ project.client_name }}" {% if project_filter == project.client_name %}selected{% endif %}>{{ project.client_name }}</option>
-                                    {% endfor %}
-                                </select>
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label small fw-semibold">Status</label>
-                                <select class="form-select form-select-sm" name="status_filter">
-                                    <option value="">All</option>
-                                    <option value="Pending" {% if status_filter == 'Pending' %}selected{% endif %}>Pending</option>
-                                    <option value="In Progress" {% if status_filter == 'In Progress' %}selected{% endif %}>In Progress</option>
-                                    <option value="Blocked" {% if status_filter == 'Blocked' %}selected{% endif %}>Blocked</option>
-                                    <option value="Completed" {% if status_filter == 'Completed' %}selected{% endif %}>Completed</option>
-                                </select>
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label small fw-semibold">Date Filter</label>
-                                <select class="form-select form-select-sm" name="date_filter" id="adminDateFilterSelect">
-                                    <option value="all" {% if date_filter == 'all' %}selected{% endif %}>All Tasks</option>
-                                    <option value="today" {% if date_filter == 'today' %}selected{% endif %}>Today</option>
-                                    <option value="last_7" {% if date_filter == 'last_7' %}selected{% endif %}>Last 7 Days</option>
-                                    <option value="last_30" {% if date_filter == 'last_30' %}selected{% endif %}>Last 30 Days</option>
-                                    <option value="this_month" {% if date_filter == 'this_month' %}selected{% endif %}>This Month</option>
-                                    <option value="custom" {% if date_filter == 'custom' %}selected{% endif %}>Custom Date Range</option>
-                                </select>
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label small fw-semibold">Start Date</label>
-                                <input type="date" class="form-control form-control-sm" name="start_date" id="adminStartDateInput" value="{{ start_date or '' }}">
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label small fw-semibold">End Date</label>
-                                <input type="date" class="form-control form-control-sm" name="end_date" id="adminEndDateInput" value="{{ end_date or '' }}">
-                            </div>
-                            <div class="col-12 d-flex justify-content-end gap-2">
-                                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('task_management') }}">Reset Filters</a>
-                                <button class="btn btn-sm btn-primary" type="submit"><i class="bi bi-funnel me-1"></i>Filter</button>
-                            </div>
-                        </form>
-                        <div class="table-responsive mt-3">
-                            <table class="table table-striped align-middle">
-                                <thead>
-                                    <tr>
-                                        <th>Category</th>
-                                        <th>Task</th>
-                                        <th>Project</th>
-                                        <th>Assigned Employee</th>
-                                        <th>Assigned By</th>
-                                        <th>Assigned Date</th>
-                                        <th>Deadline</th>
-                                        <th>Priority</th>
-                                        <th>Recurring</th>
-                                        <th>Status</th>
-                                        <th>Estimated Hours</th>
-                                        <th>Logged Hours</th>
-                                        <th>Remaining Hours</th>
-                                        <th>Variance</th>
-                                        <th>Completed By</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                {% if tasks %}
-                                    {% for task in tasks %}
-                                        <tr>
-                                            <td>{{ task.task_category or 'Legacy' }}</td>
-                                            <td>{{ task.title or '' }}</td>
-                                            <td>{{ task.project or '' }}</td>
-                                            <td>{{ task.assigned_to or '' }}</td>
-                                            <td>{{ task.assigned_by or '' }}</td>
-                                            <td>{{ task.assigned_date or '' }}</td>
-                                            <td>{{ task.deadline or '' }}</td>
-                                            <td>{{ task.priority or '' }}</td>
-                                            <td>{{ task.recurring_type or 'None' }}</td>
-                                            <td>{{ task.status or 'Pending' }}</td>
-                                            <td>{{ '%.2f'|format(task.estimated_hours or 0) }}</td>
-                                            <td>{{ '%.2f'|format(task.total_logged_hours or 0) }}</td>
-                                            <td>{{ '%.2f'|format(task.remaining_hours or 0) }}</td>
-                                            <td>
-                                                {% if task.variance_hours > 0 %}
-                                                    {{ '%.2f'|format(task.variance_hours) }} Over Estimate
-                                                {% elif task.variance_hours < 0 %}
-                                                    {{ '%.2f'|format(-task.variance_hours) }} Under Estimate
-                                                {% else %}
-                                                    On Estimate
-                                                {% endif %}
-                                            </td>
-                                            <td>{{ task.completed_by or '' }}</td>
-                                            <td>
-                                                <a class="btn btn-sm btn-secondary" href="{{ url_for('task_management', edit_id=task.id) }}">Edit</a>
-                                                <form method="post" style="display:inline-block;" onsubmit="return confirm('Delete this task?');">
-                                                    <input type="hidden" name="action" value="delete">
-                                                    <input type="hidden" name="task_id" value="{{ task.id }}">
-                                                    <button class="btn btn-sm btn-danger" type="submit">Delete</button>
-                                                </form>
-                                            </td>
-                                        </tr>
-                                    {% endfor %}
-                                {% else %}
-                                    <tr>
-                                        <td colspan="17" class="text-center text-muted py-4">No tasks found matching the selected filter criteria.</td>
-                                    </tr>
-                                {% endif %}
-                                </tbody>
-                            </table>
+                <div class="col-6 col-md">
+                    <div class="card shadow-sm border-0 border-start border-4 border-warning h-100">
+                        <div class="card-body p-3">
+                            <div class="text-muted small fw-bold mb-1"><i class="bi bi-clock-history me-1 text-warning"></i>PENDING</div>
+                            <div class="display-6 fw-bold text-warning">{{ pending_tasks_count }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md">
+                    <div class="card shadow-sm border-0 border-start border-4 border-success h-100">
+                        <div class="card-body p-3">
+                            <div class="text-muted small fw-bold mb-1"><i class="bi bi-check-circle me-1 text-success"></i>COMPLETED</div>
+                            <div class="display-6 fw-bold text-success">{{ completed_tasks_count }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md">
+                    <div class="card shadow-sm border-0 border-start border-4 border-danger h-100">
+                        <div class="card-body p-3">
+                            <div class="text-muted small fw-bold mb-1"><i class="bi bi-exclamation-octagon me-1 text-danger"></i>OVERDUE</div>
+                            <div class="display-6 fw-bold text-danger">{{ overdue_tasks_count }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md">
+                    <div class="card shadow-sm border-0 border-start border-4 border-info h-100">
+                        <div class="card-body p-3">
+                            <div class="text-muted small fw-bold mb-1"><i class="bi bi-calendar-event me-1 text-info"></i>DUE TODAY</div>
+                            <div class="display-6 fw-bold text-info">{{ due_today_tasks_count }}</div>
                         </div>
                     </div>
                 </div>
             </div>
-            <script>
-                const taskCategories = {{ task_categories | tojson }};
-                const categorySelect = document.getElementById('task-category');
-                const taskSelect = document.getElementById('task-title');
-                const customTaskContainer = document.getElementById('custom-task-container');
-                const customTaskInput = document.getElementById('custom-task-title');
 
-                function updateTaskOptions(keepSelection) {
-                    const category = categorySelect.value;
-                    const selectedTask = keepSelection ? taskSelect.value : '';
-                    const isCustom = category === 'Other (Custom)';
-                    taskSelect.innerHTML = '<option value="">Select task</option>';
+            <!-- Create / Edit Task Form Card -->
+            <div class="card shadow-sm border-0 mb-4">
+                <div class="card-header bg-white py-3 border-0">
+                    <h2 class="h5 card-title mb-0 fw-bold"><i class="bi bi-pencil-square text-primary me-2"></i>{% if edit_task %}Edit Task #{{ edit_task.id }}{% else %}Create New Task{% endif %}</h2>
+                </div>
+                <div class="card-body">
+                    <form method="post">
+                        <input type="hidden" name="action" value="{% if edit_task %}edit{% else %}create{% endif %}">
+                        {% if edit_task %}
+                            <input type="hidden" name="task_id" value="{{ edit_task.id }}">
+                        {% endif %}
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold text-muted mb-1">Task Category</label>
+                                <select class="form-select" name="task_category" id="task-category" required>
+                                    <option value="">Select category</option>
+                                    {% for category in task_categories %}
+                                        <option value="{{ category }}" {% if edit_task and edit_task.task_category == category %}selected{% endif %}>{{ category }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold text-muted mb-1">Task Title</label>
+                                <select class="form-select" name="task_title" id="task-title" required>
+                                    <option value="">Select task</option>
+                                    {% if edit_task and edit_task.task_category and edit_task.task_category != 'Other (Custom)' %}
+                                        {% for task in task_categories.get(edit_task.task_category, []) %}
+                                            <option value="{{ task }}" {% if edit_task.title == task %}selected{% endif %}>{{ task }}</option>
+                                        {% endfor %}
+                                    {% endif %}
+                                </select>
+                            </div>
+                            <div class="col-md-6 d-none" id="custom-task-container">
+                                <label class="form-label small fw-bold text-muted mb-1">Custom Task Title</label>
+                                <input class="form-control" name="custom_task_title" id="custom-task-title" value="{% if edit_task and edit_task.task_category == 'Other (Custom)' %}{{ edit_task.title }}{% endif %}">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold text-muted mb-1">Project</label>
+                                <select class="form-select" name="project" required>
+                                    <option value="">Select project</option>
+                                    {% for project in projects %}
+                                        <option value="{{ project.client_name }}" {% if edit_task and edit_task.project == project.client_name %}selected{% endif %}>{{ project.client_name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold text-muted mb-1">Assigned Employee</label>
+                                <select class="form-select" name="assigned_to" required>
+                                    <option value="">Select employee</option>
+                                    {% for employee in employees %}
+                                        <option value="{{ employee.name }}" {% if edit_task and edit_task.assigned_to == employee.name %}selected{% endif %}>{{ employee.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small fw-bold text-muted mb-1">Priority</label>
+                                <select class="form-select" name="priority" required>
+                                    <option value="Low" {% if edit_task and edit_task.priority == 'Low' %}selected{% endif %}>Low</option>
+                                    <option value="Medium" {% if edit_task and (not edit_task.priority or edit_task.priority == 'Medium') %}selected{% endif %}>Medium</option>
+                                    <option value="High" {% if edit_task and edit_task.priority == 'High' %}selected{% endif %}>High</option>
+                                    <option value="Critical" {% if edit_task and edit_task.priority == 'Critical' %}selected{% endif %}>Critical</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small fw-bold text-muted mb-1">Estimated Hours</label>
+                                <input class="form-control" name="estimated_hours" type="number" step="0.25" min="0.25" value="{{ edit_task.estimated_hours if edit_task and edit_task.estimated_hours is not none else '' }}" required>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small fw-bold text-muted mb-1">Progress (%)</label>
+                                <input class="form-control" name="progress" type="number" min="0" max="100" value="{{ edit_task.progress if edit_task and edit_task.progress is not none else 0 }}" placeholder="0 - 100">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small fw-bold text-muted mb-1">Assigned Date</label>
+                                <input class="form-control" name="assigned_date" type="date" value="{{ edit_task.assigned_date if edit_task else '' }}" required>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small fw-bold text-muted mb-1">Deadline / Due Date</label>
+                                <input class="form-control" name="deadline" type="date" value="{{ edit_task.deadline if edit_task else '' }}" required>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small fw-bold text-muted mb-1">Recurring Type</label>
+                                <select class="form-select" name="recurring_type">
+                                    <option value="">None</option>
+                                    <option value="Daily" {% if edit_task and edit_task.recurring_type == 'Daily' %}selected{% endif %}>Daily</option>
+                                    <option value="Weekly" {% if edit_task and edit_task.recurring_type == 'Weekly' %}selected{% endif %}>Weekly</option>
+                                    <option value="Monthly" {% if edit_task and edit_task.recurring_type == 'Monthly' %}selected{% endif %}>Monthly</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold text-muted mb-1">Status</label>
+                                <select class="form-select" name="status" required>
+                                    <option value="Pending" {% if edit_task and edit_task.status == 'Pending' %}selected{% endif %}>Pending</option>
+                                    <option value="In Progress" {% if edit_task and edit_task.status == 'In Progress' %}selected{% endif %}>In Progress</option>
+                                    <option value="Blocked" {% if edit_task and edit_task.status == 'Blocked' %}selected{% endif %}>Blocked</option>
+                                    <option value="Completed" {% if edit_task and edit_task.status == 'Completed' %}selected{% endif %}>Completed</option>
+                                </select>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small fw-bold text-muted mb-1">Description</label>
+                                <textarea class="form-control" name="description" rows="2">{{ edit_task.description if edit_task else '' }}</textarea>
+                            </div>
+                        </div>
+                        <div class="mt-3">
+                            <button class="btn btn-primary" type="submit">{% if edit_task %}<i class="bi bi-save me-1"></i>Save Changes{% else %}<i class="bi bi-plus-circle me-1"></i>Create Task{% endif %}</button>
+                            {% if edit_task %}
+                                <a class="btn btn-outline-secondary ms-2" href="{{ url_for('task_management') }}">Cancel</a>
+                            {% endif %}
+                        </div>
+                    </form>
+                </div>
+            </div>
 
-                    if (!isCustom && taskCategories[category]) {
-                        taskCategories[category].forEach((task) => {
-                            const option = new Option(task, task, false, task === selectedTask);
-                            taskSelect.add(option);
+            <!-- Search & Filter Card -->
+            <div class="card shadow-sm border-0 mb-4">
+                <div class="card-header bg-white py-3 border-0">
+                    <h2 class="h5 card-title mb-0 fw-bold"><i class="bi bi-funnel text-primary me-2"></i>Filter & Search Tasks</h2>
+                </div>
+                <div class="card-body">
+                    <form method="get" class="row g-3 align-items-end">
+                        <div class="col-md-3">
+                            <label class="form-label small fw-semibold text-muted">Search Query</label>
+                            <input type="text" name="q" class="form-control form-control-sm" placeholder="Title, project, employee..." value="{{ q or '' }}">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small fw-semibold text-muted">Employee</label>
+                            <select class="form-select form-select-sm" name="employee_filter">
+                                <option value="">All Employees</option>
+                                {% for employee in employees %}
+                                    <option value="{{ employee.name }}" {% if employee_filter == employee.name %}selected{% endif %}>{{ employee.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small fw-semibold text-muted">Project</label>
+                            <select class="form-select form-select-sm" name="project_filter">
+                                <option value="">All Projects</option>
+                                {% for project in projects %}
+                                    <option value="{{ project.client_name }}" {% if project_filter == project.client_name %}selected{% endif %}>{{ project.client_name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small fw-semibold text-muted">Status</label>
+                            <select class="form-select form-select-sm" name="status_filter">
+                                <option value="">All Statuses</option>
+                                <option value="Pending" {% if status_filter == 'Pending' %}selected{% endif %}>Pending</option>
+                                <option value="In Progress" {% if status_filter == 'In Progress' %}selected{% endif %}>In Progress</option>
+                                <option value="Blocked" {% if status_filter == 'Blocked' %}selected{% endif %}>Blocked</option>
+                                <option value="Completed" {% if status_filter == 'Completed' %}selected{% endif %}>Completed</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label small fw-semibold text-muted">Priority</label>
+                            <select class="form-select form-select-sm" name="priority_filter">
+                                <option value="">All Priorities</option>
+                                <option value="Low" {% if priority_filter == 'Low' %}selected{% endif %}>Low</option>
+                                <option value="Medium" {% if priority_filter == 'Medium' %}selected{% endif %}>Medium</option>
+                                <option value="High" {% if priority_filter == 'High' %}selected{% endif %}>High</option>
+                                <option value="Critical" {% if priority_filter == 'Critical' %}selected{% endif %}>Critical</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small fw-semibold text-muted">Overdue Filter</label>
+                            <select class="form-select form-select-sm" name="overdue_filter">
+                                <option value="">All Tasks</option>
+                                <option value="overdue" {% if overdue_filter == 'overdue' %}selected{% endif %}>Overdue Only</option>
+                                <option value="not_overdue" {% if overdue_filter == 'not_overdue' %}selected{% endif %}>Not Overdue</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label small fw-semibold text-muted">Date Filter</label>
+                            <select class="form-select form-select-sm" name="date_filter" id="adminDateFilterSelect">
+                                <option value="all" {% if date_filter == 'all' %}selected{% endif %}>All Tasks</option>
+                                <option value="today" {% if date_filter == 'today' %}selected{% endif %}>Today</option>
+                                <option value="last_7" {% if date_filter == 'last_7' %}selected{% endif %}>Last 7 Days</option>
+                                <option value="last_30" {% if date_filter == 'last_30' %}selected{% endif %}>Last 30 Days</option>
+                                <option value="this_month" {% if date_filter == 'this_month' %}selected{% endif %}>This Month</option>
+                                <option value="custom" {% if date_filter == 'custom' %}selected{% endif %}>Custom Date Range</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small fw-semibold text-muted">Start Date</label>
+                            <input type="date" class="form-control form-control-sm" name="start_date" id="adminStartDateInput" value="{{ start_date or '' }}">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small fw-semibold text-muted">End Date</label>
+                            <input type="date" class="form-control form-control-sm" name="end_date" id="adminEndDateInput" value="{{ end_date or '' }}">
+                        </div>
+                        <div class="col-md-3 d-flex gap-2">
+                            <button class="btn btn-sm btn-primary w-100" type="submit"><i class="bi bi-funnel me-1"></i>Apply Filters</button>
+                            <a class="btn btn-sm btn-outline-secondary w-100" href="{{ url_for('task_management') }}">Reset</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Task List Table Card -->
+            <div class="card shadow-sm border-0 mb-4">
+                <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                    <h2 class="h5 card-title mb-0 fw-bold"><i class="bi bi-list-columns me-2 text-primary"></i>Task Directory ({{ tasks|length }})</h2>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle mb-0">
+                            <thead class="table-light small">
+                                <tr>
+                                    <th>Category</th>
+                                    <th>Task Title</th>
+                                    <th>Project</th>
+                                    <th>Assigned Employee</th>
+                                    <th>Due Date</th>
+                                    <th>Priority</th>
+                                    <th>Progress</th>
+                                    <th>Status</th>
+                                    <th>Logged / Est</th>
+                                    <th class="text-end">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="small">
+                            {% if tasks %}
+                                {% for task in tasks %}
+                                    <tr>
+                                        <td><span class="badge bg-light text-dark border">{{ task.task_category or 'General' }}</span></td>
+                                        <td>
+                                            <strong class="text-dark d-block">{{ task.title or '' }}</strong>
+                                            {% if task.recurring_type %}<span class="badge bg-info text-dark small me-1"><i class="bi bi-repeat me-1"></i>{{ task.recurring_type }}</span>{% endif %}
+                                            {% if task.deadline < today_str and task.status != 'Completed' %}
+                                                <span class="badge badge-overdue"><i class="bi bi-clock-history me-1"></i>OVERDUE</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>{{ task.project or 'N/A' }}</td>
+                                        <td>
+                                            <span class="fw-semibold text-dark">{{ task.assigned_to or 'Unassigned' }}</span>
+                                            <small class="text-muted d-block">By: {{ task.assigned_by or 'Admin' }}</small>
+                                        </td>
+                                        <td>
+                                            <span class="{% if task.deadline < today_str and task.status != 'Completed' %}text-danger fw-bold{% endif %}">{{ task.deadline or 'N/A' }}</span>
+                                            <small class="text-muted d-block">From: {{ task.assigned_date or 'N/A' }}</small>
+                                        </td>
+                                        <td>
+                                            {% if task.priority == 'Critical' %}
+                                                <span class="badge badge-priority-critical"><i class="bi bi-exclamation-triangle-fill me-1"></i>Critical</span>
+                                            {% elif task.priority == 'High' %}
+                                                <span class="badge badge-priority-high"><i class="bi bi-arrow-up me-1"></i>High</span>
+                                            {% elif task.priority == 'Medium' %}
+                                                <span class="badge badge-priority-medium"><i class="bi bi-dash-lg me-1"></i>Medium</span>
+                                            {% else %}
+                                                <span class="badge badge-priority-low"><i class="bi bi-arrow-down me-1"></i>Low</span>
+                                            {% endif %}
+                                        </td>
+                                        <td style="min-width: 120px;">
+                                            <div class="d-flex justify-content-between align-items-center small fw-semibold text-muted mb-1">
+                                                <span>{{ task.progress }}%</span>
+                                            </div>
+                                            <div class="task-progress-container" style="height: 8px;">
+                                                <div class="progress-bar {% if task.progress == 100 %}bg-success{% elif task.progress >= 50 %}bg-info{% else %}bg-primary{% endif %}" role="progressbar" style="width: {{ task.progress }}%; height: 100%;" aria-valuenow="{{ task.progress }}" aria-valuemin="0" aria-valuemax="100"></div>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            {% if task.status == 'Completed' %}
+                                                <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Completed</span>
+                                            {% elif task.status == 'In Progress' %}
+                                                <span class="badge bg-primary"><i class="bi bi-play-circle me-1"></i>In Progress</span>
+                                            {% elif task.status == 'Blocked' %}
+                                                <span class="badge bg-danger"><i class="bi bi-slash-circle me-1"></i>Blocked</span>
+                                            {% else %}
+                                                <span class="badge bg-warning text-dark"><i class="bi bi-clock me-1"></i>Pending</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            <span class="fw-bold text-dark">{{ '%.2f'|format(task.total_logged_hours or 0) }}</span> / {{ '%.2f'|format(task.estimated_hours or 0) }} hrs
+                                        </td>
+                                        <td class="text-end">
+                                            <a class="btn btn-sm btn-outline-primary me-1" href="{{ url_for('task_management', edit_id=task.id) }}" title="Edit Task"><i class="bi bi-pencil"></i></a>
+                                            <form method="post" style="display:inline-block;" onsubmit="return confirm('Delete this task?');">
+                                                <input type="hidden" name="action" value="delete">
+                                                <input type="hidden" name="task_id" value="{{ task.id }}">
+                                                <button class="btn btn-sm btn-outline-danger" type="submit" title="Delete Task"><i class="bi bi-trash"></i></button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            {% else %}
+                                <tr>
+                                    <td colspan="10" class="text-center py-4 text-muted"><i class="bi bi-inbox fs-4 d-block mb-1"></i>No tasks found.</td>
+                                </tr>
+                            {% endif %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            var catSelect = document.getElementById('task-category');
+            var titleSelect = document.getElementById('task-title');
+            var customContainer = document.getElementById('custom-task-container');
+            var customTitle = document.getElementById('custom-task-title');
+            var categories = {{ task_categories | tojson }};
+
+            if (catSelect) {
+                catSelect.addEventListener('change', function() {
+                    var category = this.value;
+                    titleSelect.innerHTML = '<option value="">Select task</option>';
+                    if (category === 'Other (Custom)') {
+                        customContainer.classList.remove('d-none');
+                        customTitle.setAttribute('required', 'required');
+                        titleSelect.removeAttribute('required');
+                    } else if (categories[category]) {
+                        customContainer.classList.add('d-none');
+                        customTitle.removeAttribute('required');
+                        titleSelect.setAttribute('required', 'required');
+                        categories[category].forEach(function(t) {
+                            var opt = document.createElement('option');
+                            opt.value = t;
+                            opt.textContent = t;
+                            titleSelect.appendChild(opt);
                         });
                     }
-
-                    taskSelect.required = !isCustom;
-                    taskSelect.disabled = isCustom;
-                    customTaskContainer.classList.toggle('d-none', !isCustom);
-                    customTaskInput.required = isCustom;
-                }
-
-                categorySelect.addEventListener('change', () => updateTaskOptions(false));
-                updateTaskOptions(true);
-            </script>
-        </body>
-        </html>
+                });
+            }
+        });
+        </script>
+        {% endblock %}
         """,
         employees=employees,
         projects=projects,
-        task_categories=TASK_CATEGORIES,
         tasks=tasks,
         edit_task=edit_task,
+        task_categories=TASK_CATEGORIES,
         employee_filter=employee_filter,
         project_filter=project_filter,
         status_filter=status_filter,
+        priority_filter=priority_filter,
+        overdue_filter=overdue_filter,
         date_filter=date_filter,
         start_date=start_date,
         end_date=end_date,
+        q=q,
+        today_str=today_str,
+        total_tasks_count=total_tasks_count,
+        pending_tasks_count=pending_tasks_count,
+        completed_tasks_count=completed_tasks_count,
+        overdue_tasks_count=overdue_tasks_count,
+        due_today_tasks_count=due_today_tasks_count,
     )
 
 
