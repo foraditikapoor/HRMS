@@ -584,10 +584,19 @@ def ensure_holidays_table():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
                 date TEXT UNIQUE NOT NULL,
-                description TEXT
+                description TEXT,
+                holiday_type TEXT DEFAULT 'Public Holiday',
+                is_paid INTEGER DEFAULT 1
             )
             """
         )
+        conn.commit()
+
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(holidays)").fetchall()]
+        if "holiday_type" not in cols:
+            conn.execute("ALTER TABLE holidays ADD COLUMN holiday_type TEXT DEFAULT 'Public Holiday'")
+        if "is_paid" not in cols:
+            conn.execute("ALTER TABLE holidays ADD COLUMN is_paid INTEGER DEFAULT 1")
         conn.commit()
 
         # Seed default Indian company holidays if empty
@@ -595,16 +604,16 @@ def ensure_holidays_table():
         if row_count == 0:
             current_yr = datetime.datetime.now(tz=IST).year
             default_holidays = [
-                ("New Year's Day", f"{current_yr}-01-01", "Official Holiday"),
-                ("Republic Day", f"{current_yr}-01-26", "National Holiday"),
-                ("Labor Day", f"{current_yr}-05-01", "Official Holiday"),
-                ("Independence Day", f"{current_yr}-08-15", "National Holiday"),
-                ("Gandhi Jayanti", f"{current_yr}-10-02", "National Holiday"),
-                ("Diwali", f"{current_yr}-11-01", "Festival Holiday"),
-                ("Christmas Day", f"{current_yr}-12-25", "Official Holiday"),
+                ("New Year's Day", f"{current_yr}-01-01", "Official Holiday", "Public Holiday", 1),
+                ("Republic Day", f"{current_yr}-01-26", "National Holiday", "Public Holiday", 1),
+                ("Labor Day", f"{current_yr}-05-01", "Official Holiday", "Public Holiday", 1),
+                ("Independence Day", f"{current_yr}-08-15", "National Holiday", "Public Holiday", 1),
+                ("Gandhi Jayanti", f"{current_yr}-10-02", "National Holiday", "Public Holiday", 1),
+                ("Diwali", f"{current_yr}-11-01", "Festival Holiday", "Company Holiday", 1),
+                ("Christmas Day", f"{current_yr}-12-25", "Official Holiday", "Public Holiday", 1),
             ]
             conn.executemany(
-                "INSERT OR IGNORE INTO holidays (title, date, description) VALUES (?, ?, ?)",
+                "INSERT OR IGNORE INTO holidays (title, date, description, holiday_type, is_paid) VALUES (?, ?, ?, ?, ?)",
                 default_holidays,
             )
             conn.commit()
@@ -4070,7 +4079,7 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
         ).fetchall()
 
         holiday_rows = conn.execute(
-            "SELECT date, title, description FROM holidays WHERE date >= ? AND date <= ?",
+            "SELECT date, title, description, holiday_type, is_paid FROM holidays WHERE date >= ? AND date <= ?",
             (start_date_str, end_date_str),
         ).fetchall()
         holiday_dict = {r["date"]: r for r in holiday_rows}
@@ -4119,6 +4128,12 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
                     total_hours_sum += float(att_entry["total_hours"])
                 except (ValueError, TypeError):
                     pass
+        elif holiday_entry:
+            status = "Holiday"
+            status_code = "H"
+            status_label = f"Holiday ({holiday_entry['title']})"
+            badge_class = "bg-primary text-white"
+            holiday_count += 1
         elif leave_entry and leave_entry["status"] == "Approved":
             status = "Leave"
             status_code = "L"
@@ -4131,12 +4146,6 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
             status_label = f"Pending Leave ({leave_entry['leave_type']})"
             badge_class = "bg-warning bg-opacity-50 text-dark"
             leave_count += 1
-        elif holiday_entry:
-            status = "Holiday"
-            status_code = "H"
-            status_label = f"Holiday ({holiday_entry['title']})"
-            badge_class = "bg-primary text-white"
-            holiday_count += 1
         elif is_weekend:
             status = "Weekend"
             status_code = "W"
@@ -4164,10 +4173,13 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
         )
 
         notes_txt = ""
-        if leave_entry:
+        if holiday_entry:
+            h_type = dict(holiday_entry).get("holiday_type") or "Public Holiday"
+            h_paid = "Paid" if (dict(holiday_entry).get("is_paid") in (1, "1", "Yes")) else "Unpaid"
+            desc = f" - {holiday_entry['description']}" if holiday_entry.get("description") else ""
+            notes_txt = f"Holiday: {holiday_entry['title']} ({h_type}, {h_paid}){desc}"
+        elif leave_entry:
             notes_txt = f"Leave Reason: {leave_entry['reason'] or leave_entry['leave_type']}"
-        elif holiday_entry:
-            notes_txt = f"Holiday Details: {holiday_entry['description'] or holiday_entry['title']}"
 
         days_list.append(
             {
@@ -4190,6 +4202,8 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
                 "total_hours_fmt": hrs_fmt,
                 "leave_type": leave_entry["leave_type"] if leave_entry else None,
                 "holiday_name": holiday_entry["title"] if holiday_entry else None,
+                "holiday_type": dict(holiday_entry).get("holiday_type", "Public Holiday") if holiday_entry else None,
+                "is_paid": ("Paid" if dict(holiday_entry).get("is_paid") in (1, "1", "Yes") else "Unpaid") if holiday_entry else None,
                 "notes": notes_txt,
             }
         )
@@ -6767,9 +6781,22 @@ def apply_leave():
                 return jsonify({"status": "error", "message": msg}), 400
             return redirect(url_for("apply_leave"))
 
-        total_days = float((end_date - start_date).days + 1)
-
         with get_db() as conn:
+            # Calculate total_days excluding configured holidays
+            holiday_rows = conn.execute(
+                "SELECT date FROM holidays WHERE date >= ? AND date <= ?",
+                (start_date_str, end_date_str),
+            ).fetchall()
+            holiday_dates = {h["date"] for h in holiday_rows}
+
+            leave_days_count = 0.0
+            curr_d = start_date
+            while curr_d <= end_date:
+                if curr_d.isoformat() not in holiday_dates:
+                    leave_days_count += 1.0
+                curr_d += datetime.timedelta(days=1)
+            total_days = leave_days_count
+
             # Check duplicate pending request
             duplicate = conn.execute(
                 """
@@ -10399,9 +10426,279 @@ def settings_company():
     )
 
 
+@app.route("/settings/holidays", methods=["GET", "POST"])
+@login_required
+def settings_holidays():
+    ensure_holidays_table()
+    if request.method == "POST":
+        if current_user.role != "admin":
+            flash("Admin access required to modify holidays.", "danger")
+            return redirect(url_for("settings_holidays"))
+
+        action = request.form.get("action")
+        if action == "add":
+            title = (request.form.get("title") or "").strip()
+            h_date = (request.form.get("date") or "").strip()
+            description = (request.form.get("description") or "").strip()
+            holiday_type = request.form.get("holiday_type", "Public Holiday").strip()
+            is_paid_val = 1 if request.form.get("is_paid", "1") in ("1", "Yes", "on") else 0
+
+            if not title or not h_date:
+                flash("Holiday Name and Date are required.", "danger")
+                return redirect(url_for("settings_holidays"))
+
+            with get_db() as conn:
+                existing = conn.execute("SELECT id FROM holidays WHERE date = ?", (h_date,)).fetchone()
+                if existing:
+                    flash(f"A holiday already exists for date {h_date}.", "warning")
+                    return redirect(url_for("settings_holidays"))
+
+                conn.execute(
+                    "INSERT INTO holidays (title, date, description, holiday_type, is_paid) VALUES (?, ?, ?, ?, ?)",
+                    (title, h_date, description, holiday_type, is_paid_val),
+                )
+                conn.commit()
+            flash("Holiday added successfully.", "success")
+            return redirect(url_for("settings_holidays"))
+
+        elif action == "edit":
+            h_id = request.form.get("id")
+            title = (request.form.get("title") or "").strip()
+            h_date = (request.form.get("date") or "").strip()
+            description = (request.form.get("description") or "").strip()
+            holiday_type = request.form.get("holiday_type", "Public Holiday").strip()
+            is_paid_val = 1 if request.form.get("is_paid", "1") in ("1", "Yes", "on") else 0
+
+            if not h_id or not title or not h_date:
+                flash("Valid ID, Name, and Date are required.", "danger")
+                return redirect(url_for("settings_holidays"))
+
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE holidays SET title = ?, date = ?, description = ?, holiday_type = ?, is_paid = ? WHERE id = ?",
+                    (title, h_date, description, holiday_type, is_paid_val, h_id),
+                )
+                conn.commit()
+            flash("Holiday updated successfully.", "success")
+            return redirect(url_for("settings_holidays"))
+
+        elif action == "delete":
+            h_id = request.form.get("id")
+            if h_id:
+                with get_db() as conn:
+                    conn.execute("DELETE FROM holidays WHERE id = ?", (h_id,))
+                    conn.commit()
+                flash("Holiday deleted successfully.", "success")
+            return redirect(url_for("settings_holidays"))
+
+    with get_db() as conn:
+        holidays_rows = conn.execute(
+            "SELECT * FROM holidays ORDER BY date DESC"
+        ).fetchall()
+        holidays_list = [dict(r) for r in holidays_rows]
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Holiday Management - HRMS{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center mb-4 gap-3">
+            <div>
+                <h1><i class="bi bi-calendar-event me-2 text-primary"></i>Holiday Management</h1>
+                <p class="text-muted mb-0">Configure Public & Company Holidays for attendance and payroll calculations.</p>
+            </div>
+            {% if current_user.role == 'admin' %}
+            <div>
+                <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addHolidayModal">
+                    <i class="bi bi-plus-lg me-1"></i>Add Holiday
+                </button>
+            </div>
+            {% endif %}
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-list-stars me-2 text-primary"></i>Configured Holidays</h5>
+                <span class="badge bg-light text-dark border">Total: {{ holidays_list|length }}</span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Holiday Name</th>
+                                <th>Date</th>
+                                <th>Holiday Type</th>
+                                <th>Paid Holiday</th>
+                                <th>Description</th>
+                                {% if current_user.role == 'admin' %}<th class="text-end">Actions</th>{% endif %}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for h in holidays_list %}
+                                <tr>
+                                    <td class="fw-bold text-dark"><i class="bi bi-calendar2-check me-2 text-primary"></i>{{ h.title }}</td>
+                                    <td class="text-nowrap">{{ h.date }}</td>
+                                    <td>
+                                        <span class="badge {% if h.holiday_type == 'Public Holiday' %}bg-primary{% else %}bg-info text-dark{% endif %}">
+                                            {{ h.holiday_type or 'Public Holiday' }}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        {% if h.is_paid == 1 or h.is_paid == '1' or h.is_paid == 'Yes' %}
+                                            <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Paid</span>
+                                        {% else %}
+                                            <span class="badge bg-secondary"><i class="bi bi-x-circle me-1"></i>Unpaid</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="text-muted small">{{ h.description or '-' }}</td>
+                                    {% if current_user.role == 'admin' %}
+                                    <td class="text-end text-nowrap">
+                                        <button type="button" class="btn btn-sm btn-outline-primary me-1" data-bs-toggle="modal" data-bs-target="#editHolidayModal{{ h.id }}">
+                                            <i class="bi bi-pencil me-1"></i>Edit
+                                        </button>
+                                        <form method="POST" action="{{ url_for('settings_holidays') }}" class="d-inline" onsubmit="return confirm('Are you sure you want to delete this holiday?');">
+                                            <input type="hidden" name="action" value="delete">
+                                            <input type="hidden" name="id" value="{{ h.id }}">
+                                            <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash me-1"></i>Delete</button>
+                                        </form>
+
+                                        <!-- Edit Modal -->
+                                        <div class="modal fade text-start" id="editHolidayModal{{ h.id }}" tabindex="-1" aria-hidden="true">
+                                            <div class="modal-dialog modal-dialog-centered">
+                                                <div class="modal-content">
+                                                    <form method="POST" action="{{ url_for('settings_holidays') }}">
+                                                        <input type="hidden" name="action" value="edit">
+                                                        <input type="hidden" name="id" value="{{ h.id }}">
+                                                        <div class="modal-header">
+                                                            <h5 class="modal-title fw-bold"><i class="bi bi-pencil-square me-2 text-primary"></i>Edit Holiday</h5>
+                                                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                                        </div>
+                                                        <div class="modal-body">
+                                                            <div class="mb-3">
+                                                                <label class="form-label fw-semibold">Holiday Name</label>
+                                                                <input type="text" name="title" value="{{ h.title }}" class="form-control" required>
+                                                            </div>
+                                                            <div class="mb-3">
+                                                                <label class="form-label fw-semibold">Holiday Date</label>
+                                                                <input type="date" name="date" value="{{ h.date }}" class="form-control" required>
+                                                            </div>
+                                                            <div class="row g-3 mb-3">
+                                                                <div class="col-md-6">
+                                                                    <label class="form-label fw-semibold">Holiday Type</label>
+                                                                    <select name="holiday_type" class="form-select">
+                                                                        <option value="Public Holiday" {% if h.holiday_type == 'Public Holiday' %}selected{% endif %}>Public Holiday</option>
+                                                                        <option value="Company Holiday" {% if h.holiday_type == 'Company Holiday' %}selected{% endif %}>Company Holiday</option>
+                                                                    </select>
+                                                                </div>
+                                                                <div class="col-md-6">
+                                                                    <label class="form-label fw-semibold">Paid Holiday</label>
+                                                                    <select name="is_paid" class="form-select">
+                                                                        <option value="1" {% if h.is_paid == 1 or h.is_paid == '1' or h.is_paid == 'Yes' %}selected{% endif %}>Yes (Paid)</option>
+                                                                        <option value="0" {% if h.is_paid == 0 or h.is_paid == '0' or h.is_paid == 'No' %}selected{% endif %}>No (Unpaid)</option>
+                                                                    </select>
+                                                                </div>
+                                                            </div>
+                                                            <div class="mb-3">
+                                                                <label class="form-label fw-semibold">Description (Optional)</label>
+                                                                <textarea name="description" class="form-control" rows="2">{{ h.description or '' }}</textarea>
+                                                            </div>
+                                                        </div>
+                                                        <div class="modal-footer">
+                                                            <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                                                            <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i>Save Changes</button>
+                                                        </div>
+                                                    </form>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    {% endif %}
+                                </tr>
+                            {% else %}
+                                <tr>
+                                    <td colspan="6" class="text-center py-4 text-muted">No holidays configured yet.</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        {% if current_user.role == 'admin' %}
+        <!-- Add Holiday Modal -->
+        <div class="modal fade" id="addHolidayModal" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <form method="POST" action="{{ url_for('settings_holidays') }}">
+                        <input type="hidden" name="action" value="add">
+                        <div class="modal-header">
+                            <h5 class="modal-title fw-bold"><i class="bi bi-calendar-plus me-2 text-primary"></i>Add New Holiday</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Holiday Name</label>
+                                <input type="text" name="title" class="form-control" placeholder="e.g. Independence Day" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Holiday Date</label>
+                                <input type="date" name="date" class="form-control" required>
+                            </div>
+                            <div class="row g-3 mb-3">
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">Holiday Type</label>
+                                    <select name="holiday_type" class="form-select">
+                                        <option value="Public Holiday" selected>Public Holiday</option>
+                                        <option value="Company Holiday">Company Holiday</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">Paid Holiday</label>
+                                    <select name="is_paid" class="form-select">
+                                        <option value="1" selected>Yes (Paid)</option>
+                                        <option value="0">No (Unpaid)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Description (Optional)</label>
+                                <textarea name="description" class="form-control" rows="2" placeholder="Short description of the holiday"></textarea>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                            <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-plus-lg me-1"></i>Add Holiday</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        {% endblock %}
+        """,
+        holidays_list=holidays_list,
+    )
+
+
 @app.route("/settings/payroll", methods=["GET", "POST"])
 @login_required
 def settings_payroll():
+    ensure_payroll_table()
+    now = datetime.datetime.now(tz=IST)
+
     if request.method == "POST":
         action = request.form.get("action")
         if action == "update_base_salary":
@@ -10427,6 +10724,47 @@ def settings_payroll():
                 conn.commit()
             flash("Base salary updated successfully.", "success")
             return redirect(url_for("settings_payroll"))
+
+        elif action in ("finalize_payroll", "mark_paid"):
+            if current_user.role != "admin":
+                flash("Admin access required to update payroll status.", "danger")
+                return redirect(url_for("settings_payroll"))
+            emp_id = request.form.get("emp_id")
+            month_year_val = request.form.get("month_year")
+            new_status = "Paid" if action == "mark_paid" else "Finalized"
+            if emp_id and month_year_val:
+                try:
+                    y, m = [int(x) for x in month_year_val.split("-")]
+                except Exception:
+                    y, m = now.year, now.month
+
+                with get_db() as conn:
+                    p = calculate_employee_payroll(conn, int(emp_id), y, m)
+                    if p:
+                        created_now = datetime.datetime.now(tz=IST).strftime("%Y-%m-%d %H:%M:%S")
+                        sb_json = json.dumps(p.get("salary_breakdown", {}))
+                        conn.execute(
+                            """
+                            INSERT INTO payroll_records (
+                                employee_id, user_id, month_year, base_salary, working_days,
+                                present_days, attendance_pct, approved_leave_days, unpaid_leave_days,
+                                performance_score, leave_deduction, adjustments, final_salary, status,
+                                salary_breakdown, created_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(employee_id, month_year) DO UPDATE SET
+                                status = excluded.status
+                            """,
+                            (
+                                p["emp_id"], p.get("user_id"), p["month_year"], p["base_salary"], p["working_days"],
+                                p["present_days"], p["attendance_pct"], p["approved_leave_days"], p["unpaid_leave_days"],
+                                p["performance_score"], p["leave_deduction"], p["adjustments"], p["final_salary"], new_status,
+                                sb_json, created_now
+                            ),
+                        )
+                        conn.commit()
+                        flash(f"Payroll record for {p['name']} ({p['payroll_month']}) updated to {new_status}.", "success")
+            return redirect(url_for("settings_payroll", month=month_year_val))
+
         else:
             if current_user.role != "admin":
                 flash("Admin access required to save currency settings.", "danger")
@@ -10441,8 +10779,10 @@ def settings_payroll():
             flash("Payroll currency and settings updated.", "success")
             return redirect(url_for("settings_payroll"))
 
-    now = datetime.datetime.now(tz=IST)
     month_arg = request.args.get("month")
+    selected_emp_id = request.args.get("employee_id")
+    selected_year_filter = request.args.get("year")
+
     try:
         if month_arg and "-" in month_arg:
             y_str, m_str = month_arg.split("-", 1)
@@ -10462,25 +10802,68 @@ def settings_payroll():
             "SELECT currency FROM company_settings WHERE id = 1"
         ).fetchone()
 
+        all_employees = conn.execute("SELECT id, name, department FROM employees ORDER BY name").fetchall()
+        employees_list = [dict(r) for r in all_employees]
+
         if current_user.role == "admin":
-            emp_rows = conn.execute(
-                "SELECT id FROM employees ORDER BY name"
-            ).fetchall()
+            if selected_emp_id:
+                emp_rows = conn.execute(
+                    "SELECT id FROM employees WHERE id = ? ORDER BY name", (int(selected_emp_id),)
+                ).fetchall()
+            else:
+                emp_rows = conn.execute("SELECT id FROM employees ORDER BY name").fetchall()
         else:
             emp_rows = conn.execute(
                 "SELECT id FROM employees WHERE user_id = ? OR name = ? OR name = ? ORDER BY name",
                 (current_user.id, current_user.full_name, current_user.username),
             ).fetchall()
             if not emp_rows:
-                emp_rows = conn.execute(
-                    "SELECT id FROM employees ORDER BY name"
-                ).fetchall()
+                emp_rows = conn.execute("SELECT id FROM employees ORDER BY name").fetchall()
 
         payroll_list = []
         for emp_r in emp_rows:
             p_data = calculate_employee_payroll(conn, emp_r["id"], sel_year, sel_month)
             if p_data:
                 payroll_list.append(p_data)
+
+        # Fetch Payroll History Records
+        history_query = """
+            SELECT pr.*, e.name as emp_name, e.department as emp_dept
+            FROM payroll_records pr
+            JOIN employees e ON pr.employee_id = e.id
+        """
+        history_params = []
+        history_conditions = []
+
+        if current_user.role != "admin":
+            emp_user_rec = conn.execute("SELECT id FROM employees WHERE user_id = ?", (current_user.id,)).fetchone()
+            user_emp_id = emp_user_rec["id"] if emp_user_rec else None
+            if user_emp_id:
+                history_conditions.append("pr.employee_id = ?")
+                history_params.append(user_emp_id)
+        elif selected_emp_id:
+            history_conditions.append("pr.employee_id = ?")
+            history_params.append(int(selected_emp_id))
+
+        if selected_year_filter:
+            history_conditions.append("pr.month_year LIKE ?")
+            history_params.append(f"{selected_year_filter}-%")
+
+        if history_conditions:
+            history_query += " WHERE " + " AND ".join(history_conditions)
+
+        history_query += " ORDER BY pr.month_year DESC, pr.created_at DESC"
+
+        history_rows = conn.execute(history_query, history_params).fetchall()
+        payroll_history = []
+        for hr in history_rows:
+            h_dict = dict(hr)
+            try:
+                hy, hm = [int(x) for x in h_dict["month_year"].split("-")]
+                h_dict["month_name"] = datetime.date(hy, hm, 1).strftime("%B %Y")
+            except Exception:
+                h_dict["month_name"] = h_dict["month_year"]
+            payroll_history.append(h_dict)
 
     currency = cs["currency"] if cs else "INR (₹)"
 
@@ -10495,8 +10878,15 @@ def settings_payroll():
                 <p class="text-muted mb-0">Automated monthly salary calculation based on Attendance, approved Leaves, and Base Salary.</p>
             </div>
             <div class="d-flex align-items-center gap-2">
-                <form method="GET" action="{{ url_for('settings_payroll') }}" class="d-flex align-items-center gap-2">
-                    <label class="form-label mb-0 fw-semibold text-nowrap">Payroll Month:</label>
+                <form method="GET" action="{{ url_for('settings_payroll') }}" class="d-flex align-items-center gap-2 flex-wrap">
+                    {% if current_user.role == 'admin' %}
+                    <select name="employee_id" class="form-select form-select-sm" style="max-width: 170px;" onchange="this.form.submit()">
+                        <option value="">All Employees</option>
+                        {% for emp in employees_list %}
+                            <option value="{{ emp.id }}" {% if selected_emp_id and selected_emp_id|int == emp.id %}selected{% endif %}>{{ emp.name }}</option>
+                        {% endfor %}
+                    </select>
+                    {% endif %}
                     <input type="month" name="month" value="{{ selected_month_str }}" class="form-control form-control-sm" onchange="this.form.submit()">
                 </form>
             </div>
@@ -10535,9 +10925,9 @@ def settings_payroll():
         {% endif %}
 
         <!-- Payroll Records Table -->
-        <div class="card shadow-sm">
+        <div class="card shadow-sm mb-4">
             <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
-                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-wallet2 me-2 text-primary"></i>Employee Payroll Breakdown</h5>
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-wallet2 me-2 text-primary"></i>Current Month Payroll Breakdown</h5>
                 <span class="badge bg-light text-dark border">Month: {{ selected_month_str }}</span>
             </div>
             <div class="card-body p-0">
@@ -10557,7 +10947,7 @@ def settings_payroll():
                                 <th>Leave Deduction</th>
                                 <th>Final Salary</th>
                                 <th>Status</th>
-                                <th>Salary Breakdown</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -10588,11 +10978,29 @@ def settings_payroll():
                                     <td class="text-center"><span class="fw-semibold text-primary">{{ item.performance_score }}%</span></td>
                                     <td class="text-danger fw-semibold">{{ item.leave_deduction | inr }}</td>
                                     <td class="fw-bold text-success fs-6">{{ item.final_salary | inr }}</td>
-                                    <td><span class="badge bg-info text-dark">{{ item.payroll_status }}</span></td>
                                     <td>
-                                        <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" data-bs-toggle="modal" data-bs-target="#breakdownModal{{ item.emp_id }}">
+                                        {% if item.payroll_status == 'Paid' %}
+                                            <span class="badge bg-success"><i class="bi bi-check-all me-1"></i>Paid</span>
+                                        {% elif item.payroll_status == 'Finalized' %}
+                                            <span class="badge bg-primary"><i class="bi bi-lock-fill me-1"></i>Finalized</span>
+                                        {% else %}
+                                            <span class="badge bg-info text-dark">{{ item.payroll_status }}</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="text-nowrap">
+                                        <button type="button" class="btn btn-sm btn-outline-secondary me-1" data-bs-toggle="modal" data-bs-target="#breakdownModal{{ item.emp_id }}">
                                             <i class="bi bi-calculator me-1"></i>Breakdown
                                         </button>
+                                        {% if current_user.role == 'admin' %}
+                                            {% if item.payroll_status != 'Paid' %}
+                                                <form method="POST" action="{{ url_for('settings_payroll') }}" class="d-inline">
+                                                    <input type="hidden" name="action" value="mark_paid">
+                                                    <input type="hidden" name="emp_id" value="{{ item.emp_id }}">
+                                                    <input type="hidden" name="month_year" value="{{ item.month_year }}">
+                                                    <button type="submit" class="btn btn-sm btn-success" title="Mark as Paid"><i class="bi bi-check2-all me-1"></i>Mark Paid</button>
+                                                </form>
+                                            {% endif %}
+                                        {% endif %}
 
                                         <!-- Breakdown Modal -->
                                         <div class="modal fade" id="breakdownModal{{ item.emp_id }}" tabindex="-1" aria-hidden="true">
@@ -10600,7 +11008,7 @@ def settings_payroll():
                                                 <div class="modal-content">
                                                     <div class="modal-header">
                                                         <h5 class="modal-title fw-bold"><i class="bi bi-file-earmark-spreadsheet me-2 text-primary"></i>Salary Breakdown - {{ item.name }}</h5>
-                                                        <button type="button" class="btn-close" data-bs-dismiss="button" data-bs-dismiss="modal" aria-label="Close"></button>
+                                                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                                                     </div>
                                                     <div class="modal-body">
                                                         <div class="list-group list-group-flush">
@@ -10651,11 +11059,126 @@ def settings_payroll():
                 </div>
             </div>
         </div>
+
+        <!-- FEATURE 1: PAYROLL HISTORY & TIMELINE -->
+        <div class="card shadow-sm">
+            <div class="card-header bg-white py-3 border-0 d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-clock-history me-2 text-primary"></i>Payroll History & Timeline</h5>
+                <form method="GET" action="{{ url_for('settings_payroll') }}" class="d-flex align-items-center gap-2 flex-wrap">
+                    {% if selected_emp_id %}<input type="hidden" name="employee_id" value="{{ selected_emp_id }}">{% endif %}
+                    <select name="year" class="form-select form-select-sm" style="width: 110px;" onchange="this.form.submit()">
+                        <option value="">All Years</option>
+                        <option value="2026" {% if selected_year_filter == '2026' %}selected{% endif %}>2026</option>
+                        <option value="2025" {% if selected_year_filter == '2025' %}selected{% endif %}>2025</option>
+                        <option value="2024" {% if selected_year_filter == '2024' %}selected{% endif %}>2024</option>
+                    </select>
+                </form>
+            </div>
+            <div class="card-body">
+                {% if payroll_history %}
+                    <div class="timeline position-relative ps-3">
+                        {% for record in payroll_history %}
+                            <div class="timeline-item mb-4 pb-3 border-bottom position-relative">
+                                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                                    <div>
+                                        <span class="badge {% if record.status == 'Paid' %}bg-success{% elif record.status == 'Finalized' %}bg-primary{% else %}bg-info text-dark{% endif %} me-2">
+                                            {% if record.status == 'Paid' %}<i class="bi bi-check-all me-1"></i>Paid{% elif record.status == 'Finalized' %}<i class="bi bi-lock-fill me-1"></i>Finalized{% else %}{{ record.status }}{% endif %}
+                                        </span>
+                                        <strong class="fs-6 text-dark me-2">{{ record.month_name }}</strong>
+                                        <span class="text-muted small">({{ record.emp_name }} - {{ record.emp_dept or 'N/A' }})</span>
+                                    </div>
+                                    <div class="d-flex align-items-center gap-3">
+                                        <span class="fw-bold text-success fs-6">{{ record.final_salary | inr }}</span>
+                                        <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#historyDetailModal{{ record.id }}">
+                                            <i class="bi bi-eye me-1"></i>View Details
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="text-muted small">
+                                    Generated: {{ record.created_at }} • Working Days: {{ record.working_days }} • Attendance: {{ record.attendance_pct }}%
+                                </div>
+
+                                <!-- History Detail Modal displaying all 15 required details -->
+                                <div class="modal fade text-start" id="historyDetailModal{{ record.id }}" tabindex="-1" aria-hidden="true">
+                                    <div class="modal-dialog modal-dialog-centered modal-lg">
+                                        <div class="modal-content">
+                                            <div class="modal-header">
+                                                <h5 class="modal-title fw-bold"><i class="bi bi-receipt me-2 text-primary"></i>Historical Payroll Record - {{ record.month_name }}</h5>
+                                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                            </div>
+                                            <div class="modal-body">
+                                                <div class="row g-3 mb-3">
+                                                    <div class="col-md-6">
+                                                        <div class="p-3 bg-light rounded border">
+                                                            <div class="text-muted small fw-semibold">Employee Name</div>
+                                                            <div class="fw-bold text-dark fs-6">{{ record.emp_name }}</div>
+                                                            <div class="text-muted small">Department: {{ record.emp_dept or 'N/A' }}</div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <div class="p-3 bg-light rounded border">
+                                                            <div class="text-muted small fw-semibold">Payroll Status & Date</div>
+                                                            <div>
+                                                                <span class="badge {% if record.status == 'Paid' %}bg-success{% else %}bg-primary{% endif %} me-2">{{ record.status }}</span>
+                                                                <span class="fw-bold text-dark">{{ record.month_name }}</span>
+                                                            </div>
+                                                            <div class="text-muted small mt-1">Generated Date: {{ record.created_at }}</div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div class="table-responsive">
+                                                    <table class="table table-bordered align-middle">
+                                                        <thead class="table-light">
+                                                            <tr>
+                                                                <th>Metric / Field</th>
+                                                                <th>Historical Recorded Value</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            <tr><td>Base Salary</td><td class="fw-bold">{{ record.base_salary | inr }}</td></tr>
+                                                            <tr><td>Working Days</td><td>{{ record.working_days }} Days</td></tr>
+                                                            <tr><td>Present Days</td><td class="text-success fw-semibold">{{ record.present_days }} Days</td></tr>
+                                                            <tr><td>Attendance %</td><td class="text-success fw-bold">{{ record.attendance_pct }}%</td></tr>
+                                                            <tr><td>Approved Leave Days</td><td class="text-info fw-semibold">{{ record.approved_leave_days }} Days</td></tr>
+                                                            <tr><td>Unpaid Leave Days</td><td class="{% if record.unpaid_leave_days > 0 %}text-danger fw-bold{% else %}text-muted{% endif %}">{{ record.unpaid_leave_days }} Days</td></tr>
+                                                            <tr><td>Performance Score %</td><td class="text-primary fw-semibold">{{ record.performance_score }}%</td></tr>
+                                                            <tr><td>Leave Deduction</td><td class="text-danger fw-bold">- {{ record.leave_deduction | inr }}</td></tr>
+                                                            <tr><td>Adjustments</td><td>{{ record.adjustments | inr }}</td></tr>
+                                                            <tr class="table-success">
+                                                                <td class="fw-bold">Final Salary Paid</td>
+                                                                <td class="fw-bold text-success fs-5">{{ record.final_salary | inr }}</td>
+                                                            </tr>
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                            <div class="modal-footer">
+                                                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="text-center py-4 text-muted">
+                        <i class="bi bi-clock-history display-6 d-block mb-2 text-secondary"></i>
+                        No historical payroll records found for the selected filters. Mark a month's payroll as Paid or Finalized to save it into history.
+                    </div>
+                {% endif %}
+            </div>
+        </div>
         {% endblock %}
         """,
         currency=currency,
         payroll_list=payroll_list,
+        payroll_history=payroll_history,
+        employees_list=employees_list,
         selected_month_str=selected_month_str,
+        selected_emp_id=selected_emp_id,
+        selected_year_filter=selected_year_filter,
     )
 
 
