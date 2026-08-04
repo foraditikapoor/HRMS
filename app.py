@@ -9970,7 +9970,7 @@ def settings_profile():
 
         emp_row = conn.execute(
             "SELECT id FROM employees WHERE user_id = ? OR name = ? OR name = ? ORDER BY id LIMIT 1",
-            (current_user.id, current_user.full_name, current_user.username),
+            (current_user.id, u["full_name"] if u else None, current_user.username),
         ).fetchone()
 
         payroll = calculate_employee_payroll(conn, emp_row["id"]) if emp_row else None
@@ -10815,9 +10815,13 @@ def settings_payroll():
             else:
                 emp_rows = conn.execute("SELECT id FROM employees ORDER BY name").fetchall()
         else:
+            u_fn = None
+            u_rec = conn.execute("SELECT full_name FROM users WHERE id = ?", (current_user.id,)).fetchone()
+            if u_rec and u_rec["full_name"]:
+                u_fn = u_rec["full_name"]
             emp_rows = conn.execute(
                 "SELECT id FROM employees WHERE user_id = ? OR name = ? OR name = ? ORDER BY name",
-                (current_user.id, current_user.full_name, current_user.username),
+                (current_user.id, u_fn, current_user.username),
             ).fetchall()
             if not emp_rows:
                 emp_rows = conn.execute("SELECT id FROM employees ORDER BY name").fetchall()
