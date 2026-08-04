@@ -35,20 +35,22 @@
 
             {% set active_endpoint = request.endpoint or '' %}
             {% set is_admin = current_user.is_authenticated and current_user.role == 'admin' %}
+            {% set is_hr = current_user.is_authenticated and current_user.role == 'hr' %}
+            {% set is_admin_or_hr = is_admin or is_hr %}
             <nav class="sidebar-nav">
                 <a class="sidebar-link {% if active_endpoint == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}"><i class="bi bi-grid-1x2-fill"></i><span>Dashboard</span></a>
-                {% if is_admin %}<a class="sidebar-link {% if active_endpoint in ['admin_employees', 'add_employee', 'view_employee', 'edit_employee'] %}active{% endif %}" href="{{ url_for('admin_employees') }}"><i class="bi bi-people"></i><span>Employees</span></a>{% endif %}
-                {% if is_admin %}
+                {% if is_admin_or_hr %}<a class="sidebar-link {% if active_endpoint in ['admin_employees', 'add_employee', 'view_employee', 'edit_employee'] %}active{% endif %}" href="{{ url_for('admin_employees') }}"><i class="bi bi-people"></i><span>Employees</span></a>{% endif %}
+                {% if is_admin_or_hr %}
                 <a class="sidebar-link {% if active_endpoint == 'admin_attendance' %}active{% endif %}" href="{{ url_for('admin_attendance') }}"><i class="bi bi-calendar-check"></i><span>Attendance</span></a>
                 {% else %}
                 <a class="sidebar-link {% if active_endpoint == 'employee_attendance_calendar' %}active{% endif %}" href="{{ url_for('employee_attendance_calendar') }}"><i class="bi bi-calendar3"></i><span>Attendance Calendar</span></a>
                 {% endif %}
-                <a class="sidebar-link {% if active_endpoint in ['apply_leave', 'my_leave_requests', 'view_all_leave_requests', 'pending_leave_requests'] %}active{% endif %}" href="{{ url_for('pending_leave_requests') if is_admin else url_for('my_leave_requests') }}"><i class="bi bi-calendar-minus"></i><span>Leave</span></a>
+                <a class="sidebar-link {% if active_endpoint in ['apply_leave', 'my_leave_requests', 'view_all_leave_requests', 'pending_leave_requests'] %}active{% endif %}" href="{{ url_for('pending_leave_requests') if is_admin_or_hr else url_for('my_leave_requests') }}"><i class="bi bi-calendar-minus"></i><span>Leave</span></a>
                 {% if is_admin %}<a class="sidebar-link {% if active_endpoint in ['admin_projects', 'add_project', 'view_project', 'edit_project'] %}active{% endif %}" href="{{ url_for('admin_projects') }}"><i class="bi bi-kanban"></i><span>Projects</span></a>{% endif %}
                 <a class="sidebar-link {% if active_endpoint in ['my_tasks', 'task_management'] %}active{% endif %}" href="{{ url_for('task_management') if is_admin else url_for('my_tasks') }}"><i class="bi bi-check2-square"></i><span>Tasks</span></a>
                 {% if is_admin %}<a class="sidebar-link {% if active_endpoint == 'completed_tasks_archive' %}active{% endif %}" href="{{ url_for('completed_tasks_archive') }}"><i class="bi bi-archive"></i><span>Completed Tasks</span></a>{% endif %}
                 {% if is_admin %}<a class="sidebar-link {% if active_endpoint in ['admin_clients', 'add_client', 'edit_client'] %}active{% endif %}" href="{{ url_for('admin_clients') }}"><i class="bi bi-buildings"></i><span>Clients</span></a>{% endif %}
-                {% if is_admin %}<a class="sidebar-link {% if active_endpoint in ['performance_dashboard', 'employee_performance_profile', 'add_performance_review'] %}active{% endif %}" href="{{ url_for('performance_dashboard') }}"><i class="bi bi-graph-up-arrow"></i><span>Performance</span></a>{% endif %}
+                {% if is_admin_or_hr %}<a class="sidebar-link {% if active_endpoint in ['performance_dashboard', 'employee_performance_profile', 'add_performance_review'] %}active{% endif %}" href="{{ url_for('performance_dashboard') }}"><i class="bi bi-graph-up-arrow"></i><span>Performance</span></a>{% endif %}
                 {% if is_admin %}
                 {% set is_reports_active = active_endpoint in ['reports_dashboard', 'reports_employees', 'reports_attendance', 'reports_leave', 'reports_performance', 'reports_projects'] %}
                 <div>
@@ -87,7 +89,7 @@
                             <a class="sidebar-sublink {% if active_endpoint == 'settings_appearance' %}active{% endif %}" href="{{ url_for('settings_appearance') }}"><i class="bi bi-palette"></i><span>Appearance</span></a>
                             {% if is_admin %}<a class="sidebar-sublink {% if active_endpoint == 'settings_company' %}active{% endif %}" href="{{ url_for('settings_company') }}"><i class="bi bi-building-gear"></i><span>Company</span></a>{% endif %}
                             <a class="sidebar-sublink {% if active_endpoint == 'settings_payroll' %}active{% endif %}" href="{{ url_for('settings_payroll') }}"><i class="bi bi-currency-rupee"></i><span>Payroll</span></a>
-                            <a class="sidebar-sublink {% if active_endpoint == 'settings_holidays' %}active{% endif %}" href="{{ url_for('settings_holidays') }}"><i class="bi bi-calendar-event"></i><span>Holidays</span></a>
+                            {% if is_admin_or_hr %}<a class="sidebar-sublink {% if active_endpoint == 'settings_holidays' %}active{% endif %}" href="{{ url_for('settings_holidays') }}"><i class="bi bi-calendar-event"></i><span>Holidays</span></a>{% endif %}
                             <a class="sidebar-sublink {% if active_endpoint == 'settings_notifications' %}active{% endif %}" href="{{ url_for('settings_notifications') }}"><i class="bi bi-bell-gear"></i><span>Notifications</span></a>
                         </div>
                     </div>
@@ -134,7 +136,7 @@
                         </span>
                         <span class="user-details">
                             <strong>{{ current_user.username }}</strong>
-                            <small>{{ current_user.role|title }}</small>
+                            <small>{{ 'HR' if current_user.role == 'hr' else current_user.role|title }}</small>
                         </span>
                     </div>
                     <a class="logout-link" href="{{ url_for('logout') }}" title="Log out"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>

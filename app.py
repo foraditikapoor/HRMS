@@ -460,7 +460,7 @@ class User(UserMixin):
         self.id = user_id
         self.username = username
         self.password_hash = password_hash
-        self.role = role
+        self.role = (role or "user").lower()
         self.force_password_change = bool(force_password_change)
         self.profile_pic = profile_pic
         self.last_active_at = last_active_at
@@ -1931,7 +1931,7 @@ def dashboard():
 
     admin_summary = None
     admin_pending_tasks = []
-    if current_user.role == "admin":
+    if current_user.role in ("admin", "hr"):
         with get_db() as conn:
             pref = conn.execute(
                 "SELECT dashboard_reset_at FROM user_preferences WHERE user_id = ?",
@@ -3906,7 +3906,7 @@ def create_user():
 
         if not full_name or not email or not username or not role:
             message = "All fields are required."
-        elif role not in {"employee", "user", "admin"}:
+        elif role not in {"employee", "user", "admin", "hr"}:
             message = "Invalid role selected."
         else:
             with get_db() as conn:
@@ -3990,6 +3990,7 @@ def create_user():
                                 <label class="form-label">Role</label>
                                 <select class="form-select" name="role" required>
                                     <option value="employee" selected>Employee</option>
+                                    <option value="hr">HR</option>
                                     <option value="user">User</option>
                                     <option value="admin">Admin</option>
                                 </select>
@@ -4692,8 +4693,8 @@ def employee_attendance_calendar():
 @login_required
 def admin_attendance():
     """Admin Attendance Calendar & Monthly Report Dashboard"""
-    if current_user.role != "admin":
-        flash("Admin access required.", "danger")
+    if current_user.role not in ("admin", "hr"):
+        flash("Access denied.", "danger")
         return redirect(url_for("dashboard"))
 
     today = datetime.datetime.now(tz=IST).date()
@@ -5142,8 +5143,8 @@ def api_attendance_calendar_events():
     month = request.args.get("month", type=int, default=today.month)
     target_user_id = request.args.get("user_id", type=int, default=current_user.id)
 
-    # Permission check: Non-admin can only request their own user_id
-    if current_user.role != "admin" and target_user_id != current_user.id:
+    # Permission check: Non-admin/non-HR can only request their own user_id
+    if current_user.role not in ("admin", "hr") and target_user_id != current_user.id:
         return jsonify({"error": "Unauthorized"}), 403
 
     cal_data = get_monthly_attendance_calendar_data(year, month, target_user_id)
@@ -5281,8 +5282,8 @@ def delete_user(user_id):
 @app.route("/admin/employees")
 @login_required
 def admin_employees():
-    if current_user.role != "admin":
-        flash("Admin access required.", "danger")
+    if current_user.role not in ("admin", "hr"):
+        flash("Access denied.", "danger")
         return redirect(url_for("dashboard"))
     with get_db() as conn:
         rows = conn.execute(
@@ -5367,8 +5368,8 @@ def admin_employees():
 @app.route("/admin/employees/add", methods=["GET", "POST"])
 @login_required
 def add_employee():
-    if current_user.role != "admin":
-        flash("Admin access required.", "danger")
+    if current_user.role not in ("admin", "hr"):
+        flash("Access denied.", "danger")
         return redirect(url_for("dashboard"))
     if request.method == "POST":
         name = request.form.get("name", "").strip()
@@ -5485,8 +5486,8 @@ def add_employee():
 @app.route("/admin/employees/<int:emp_id>")
 @login_required
 def view_employee(emp_id):
-    if current_user.role != "admin":
-        flash("Admin access required.", "danger")
+    if current_user.role not in ("admin", "hr"):
+        flash("Access denied.", "danger")
         return redirect(url_for("dashboard"))
     with get_db() as conn:
         r = conn.execute("SELECT * FROM employees WHERE id = ?", (emp_id,)).fetchone()
@@ -5686,8 +5687,8 @@ def view_employee(emp_id):
 @app.route("/admin/employees/<int:emp_id>/update-salary", methods=["POST"])
 @login_required
 def update_employee_base_salary(emp_id):
-    if current_user.role != "admin":
-        flash("Admin access required to edit Base Salary.", "danger")
+    if current_user.role not in ("admin", "hr"):
+        flash("Access denied to edit Base Salary.", "danger")
         return redirect(url_for("dashboard"))
 
     new_salary = request.form.get("salary")
@@ -5720,14 +5721,19 @@ def update_employee_base_salary(emp_id):
 @app.route("/admin/employees/<int:emp_id>/edit", methods=["GET", "POST"])
 @login_required
 def edit_employee(emp_id):
-    if current_user.role != "admin":
-        flash("Admin access required.", "danger")
+    if current_user.role not in ("admin", "hr"):
+        flash("Access denied.", "danger")
         return redirect(url_for("dashboard"))
     with get_db() as conn:
         r = conn.execute("SELECT * FROM employees WHERE id = ?", (emp_id,)).fetchone()
         if not r:
             flash("Employee not found.", "warning")
             return redirect(url_for("admin_employees"))
+        if current_user.role == "hr" and r["user_id"]:
+            target_user = conn.execute("SELECT role FROM users WHERE id = ?", (r["user_id"],)).fetchone()
+            if target_user and target_user["role"] == "admin":
+                flash("Access denied. HR cannot edit Admin accounts.", "danger")
+                return redirect(url_for("admin_employees"))
     if request.method == "POST":
         name = request.form.get("name", "").strip()
         address = request.form.get("address", "").strip()
@@ -5863,8 +5869,8 @@ def edit_employee(emp_id):
 @app.route("/admin/employees/<int:emp_id>/delete", methods=["POST"])
 @login_required
 def delete_employee(emp_id):
-    if current_user.role != "admin":
-        flash("Admin access required.", "danger")
+    if current_user.role not in ("admin", "hr"):
+        flash("Access denied.", "danger")
         return redirect(url_for("dashboard"))
 
     with get_db() as conn:
@@ -5872,6 +5878,11 @@ def delete_employee(emp_id):
         if not r:
             flash("Employee not found.", "warning")
             return redirect(url_for("admin_employees"))
+        if current_user.role == "hr" and r["user_id"]:
+            target_user = conn.execute("SELECT role FROM users WHERE id = ?", (r["user_id"],)).fetchone()
+            if target_user and target_user["role"] == "admin":
+                flash("Access denied. HR cannot delete Admin accounts.", "danger")
+                return redirect(url_for("admin_employees"))
 
         linked_user_id = r["user_id"]
         employee_name = r["name"]
@@ -7227,11 +7238,11 @@ def cancel_leave(leave_id):
 @app.route("/admin/leave/all", methods=["GET"])
 @login_required
 def view_all_leave_requests():
-    if current_user.role != "admin":
-        flash("Admin access required.", "danger")
+    if current_user.role not in ("admin", "hr"):
+        flash("Access denied.", "danger")
         if request.is_json or request.headers.get("Accept") == "application/json":
             return (
-                jsonify({"status": "error", "message": "Admin access required."}),
+                jsonify({"status": "error", "message": "Access denied."}),
                 403,
             )
         return redirect(url_for("dashboard"))
@@ -7387,11 +7398,11 @@ def view_all_leave_requests():
 @app.route("/admin/leave/pending", methods=["GET"])
 @login_required
 def pending_leave_requests():
-    if current_user.role != "admin":
-        flash("Admin access required.", "danger")
+    if current_user.role not in ("admin", "hr"):
+        flash("Access denied.", "danger")
         if request.is_json or request.headers.get("Accept") == "application/json":
             return (
-                jsonify({"status": "error", "message": "Admin access required."}),
+                jsonify({"status": "error", "message": "Access denied."}),
                 403,
             )
         return redirect(url_for("dashboard"))
@@ -7551,11 +7562,11 @@ def pending_leave_requests():
 @app.route("/admin/leave/<int:leave_id>/approve", methods=["POST"])
 @login_required
 def approve_leave(leave_id):
-    if current_user.role != "admin":
-        flash("Admin access required.", "danger")
+    if current_user.role not in ("admin", "hr"):
+        flash("Access denied.", "danger")
         if request.is_json:
             return (
-                jsonify({"status": "error", "message": "Admin access required."}),
+                jsonify({"status": "error", "message": "Access denied."}),
                 403,
             )
         return redirect(url_for("dashboard"))
@@ -7624,11 +7635,11 @@ def approve_leave(leave_id):
 @app.route("/admin/leave/<int:leave_id>/reject", methods=["POST"])
 @login_required
 def reject_leave(leave_id):
-    if current_user.role != "admin":
-        flash("Admin access required.", "danger")
+    if current_user.role not in ("admin", "hr"):
+        flash("Access denied.", "danger")
         if request.is_json:
             return (
-                jsonify({"status": "error", "message": "Admin access required."}),
+                jsonify({"status": "error", "message": "Access denied."}),
                 403,
             )
         return redirect(url_for("dashboard"))
@@ -7718,8 +7729,8 @@ def reject_leave(leave_id):
 @app.route("/performance")
 @login_required
 def performance_dashboard():
-    if current_user.role != "admin":
-        flash("Access denied. Admin privileges required.", "danger")
+    if current_user.role not in ("admin", "hr"):
+        flash("Access denied.", "danger")
         return redirect(url_for("dashboard"))
 
     with get_db() as conn:
@@ -8000,7 +8011,7 @@ def performance_dashboard():
 @app.route("/performance/profile/<int:user_id>")
 @login_required
 def employee_performance_profile(user_id):
-    if current_user.role != "admin" and current_user.id != user_id:
+    if current_user.role not in ("admin", "hr") and current_user.id != user_id:
         flash("Access denied.", "danger")
         return redirect(url_for("dashboard"))
 
@@ -8053,7 +8064,7 @@ def employee_performance_profile(user_id):
             </div>
             <div class="d-flex gap-2">
                 <a class="btn btn-outline-secondary" href="{{ url_for('performance_dashboard') }}"><i class="bi bi-arrow-left me-1"></i>Back to Dashboard</a>
-                {% if current_user.role == 'admin' %}
+                {% if current_user.role in ['admin', 'hr'] %}
                     <a class="btn btn-primary" href="{{ url_for('add_performance_review', user_id=emp.id) }}"><i class="bi bi-plus-lg me-1"></i>Add Review</a>
                 {% endif %}
             </div>
@@ -8234,8 +8245,8 @@ def employee_performance_profile(user_id):
 @app.route("/performance/review/add/<int:user_id>", methods=["GET", "POST"])
 @login_required
 def add_performance_review(user_id):
-    if current_user.role != "admin":
-        flash("Admin access required to add performance reviews.", "danger")
+    if current_user.role not in ("admin", "hr"):
+        flash("Access denied to add performance reviews.", "danger")
         return redirect(url_for("dashboard"))
 
     with get_db() as conn:
@@ -10621,8 +10632,8 @@ def settings_company():
 def settings_holidays():
     ensure_holidays_table()
     if request.method == "POST":
-        if current_user.role != "admin":
-            flash("Admin access required to modify holidays.", "danger")
+        if current_user.role not in ("admin", "hr"):
+            flash("Access denied to modify holidays.", "danger")
             return redirect(url_for("settings_holidays"))
 
         action = request.form.get("action")
@@ -10697,7 +10708,7 @@ def settings_holidays():
                 <h1><i class="bi bi-calendar-event me-2 text-primary"></i>Holiday Management</h1>
                 <p class="text-muted mb-0">Configure Public & Company Holidays for attendance and payroll calculations.</p>
             </div>
-            {% if current_user.role == 'admin' %}
+            {% if current_user.role in ['admin', 'hr'] %}
             <div>
                 <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addHolidayModal">
                     <i class="bi bi-plus-lg me-1"></i>Add Holiday
@@ -10732,7 +10743,7 @@ def settings_holidays():
                                 <th>Holiday Type</th>
                                 <th>Paid Holiday</th>
                                 <th>Description</th>
-                                {% if current_user.role == 'admin' %}<th class="text-end">Actions</th>{% endif %}
+                                {% if current_user.role in ['admin', 'hr'] %}<th class="text-end">Actions</th>{% endif %}
                             </tr>
                         </thead>
                         <tbody>
@@ -10753,7 +10764,7 @@ def settings_holidays():
                                         {% endif %}
                                     </td>
                                     <td class="text-muted small">{{ h.description or '-' }}</td>
-                                    {% if current_user.role == 'admin' %}
+                                    {% if current_user.role in ['admin', 'hr'] %}
                                     <td class="text-end text-nowrap">
                                         <button type="button" class="btn btn-sm btn-outline-primary me-1" data-bs-toggle="modal" data-bs-target="#editHolidayModal{{ h.id }}">
                                             <i class="bi bi-pencil me-1"></i>Edit
@@ -10827,7 +10838,7 @@ def settings_holidays():
             </div>
         </div>
 
-        {% if current_user.role == 'admin' %}
+        {% if current_user.role in ['admin', 'hr'] %}
         <!-- Add Holiday Modal -->
         <div class="modal fade" id="addHolidayModal" tabindex="-1" aria-hidden="true">
             <div class="modal-dialog modal-dialog-centered">
@@ -10892,8 +10903,8 @@ def settings_payroll():
     if request.method == "POST":
         action = request.form.get("action")
         if action == "update_base_salary":
-            if current_user.role != "admin":
-                flash("Admin access required to edit Base Salary.", "danger")
+            if current_user.role not in ("admin", "hr"):
+                flash("Access denied to edit Base Salary.", "danger")
                 return redirect(url_for("settings_payroll"))
             emp_id = request.form.get("emp_id")
             new_salary = request.form.get("salary")
@@ -10916,8 +10927,8 @@ def settings_payroll():
             return redirect(url_for("settings_payroll"))
 
         elif action in ("finalize_payroll", "mark_paid"):
-            if current_user.role != "admin":
-                flash("Admin access required to update payroll status.", "danger")
+            if current_user.role not in ("admin", "hr"):
+                flash("Access denied to update payroll status.", "danger")
                 return redirect(url_for("settings_payroll"))
             emp_id = request.form.get("emp_id")
             month_year_val = request.form.get("month_year")
@@ -10995,7 +11006,7 @@ def settings_payroll():
         all_employees = conn.execute("SELECT id, name, department FROM employees ORDER BY name").fetchall()
         employees_list = [dict(r) for r in all_employees]
 
-        if current_user.role == "admin":
+        if current_user.role in ("admin", "hr"):
             if selected_emp_id:
                 emp_rows = conn.execute(
                     "SELECT id FROM employees WHERE id = ? ORDER BY name", (int(selected_emp_id),)
@@ -11029,7 +11040,7 @@ def settings_payroll():
         history_params = []
         history_conditions = []
 
-        if current_user.role != "admin":
+        if current_user.role not in ("admin", "hr"):
             emp_user_rec = conn.execute("SELECT id FROM employees WHERE user_id = ?", (current_user.id,)).fetchone()
             user_emp_id = emp_user_rec["id"] if emp_user_rec else None
             if user_emp_id:
@@ -11073,7 +11084,7 @@ def settings_payroll():
             </div>
             <div class="d-flex align-items-center gap-2">
                 <form method="GET" action="{{ url_for('settings_payroll') }}" class="d-flex align-items-center gap-2 flex-wrap">
-                    {% if current_user.role == 'admin' %}
+                    {% if current_user.role in ['admin', 'hr'] %}
                     <select name="employee_id" class="form-select form-select-sm" style="max-width: 170px;" onchange="this.form.submit()">
                         <option value="">All Employees</option>
                         {% for emp in employees_list %}
@@ -11153,7 +11164,7 @@ def settings_payroll():
                                     </td>
                                     <td class="text-nowrap">{{ item.payroll_month }}</td>
                                     <td>
-                                        {% if current_user.role == 'admin' %}
+                                        {% if current_user.role in ['admin', 'hr'] %}
                                             <form method="POST" action="{{ url_for('settings_payroll') }}" class="d-flex align-items-center gap-1" style="min-width: 130px;">
                                                 <input type="hidden" name="action" value="update_base_salary">
                                                 <input type="hidden" name="emp_id" value="{{ item.emp_id }}">
@@ -11185,7 +11196,7 @@ def settings_payroll():
                                         <button type="button" class="btn btn-sm btn-outline-secondary me-1" data-bs-toggle="modal" data-bs-target="#breakdownModal{{ item.emp_id }}">
                                             <i class="bi bi-calculator me-1"></i>Breakdown
                                         </button>
-                                        {% if current_user.role == 'admin' %}
+                                        {% if current_user.role in ['admin', 'hr'] %}
                                             {% if item.payroll_status != 'Paid' %}
                                                 <form method="POST" action="{{ url_for('settings_payroll') }}" class="d-inline">
                                                     <input type="hidden" name="action" value="mark_paid">
