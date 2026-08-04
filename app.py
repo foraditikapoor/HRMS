@@ -1175,6 +1175,7 @@ def dashboard():
         ).fetchall()
 
     admin_summary = None
+    admin_pending_tasks = []
     if current_user.role == "admin":
         with get_db() as conn:
             pref = conn.execute(
@@ -1219,6 +1220,24 @@ def dashboard():
                 "on_leave": on_leave,
                 "reset_at": reset_at,
             }
+
+            raw_tasks = conn.execute(
+                """
+                SELECT id, title, assigned_to, priority, deadline, status, project, task_category
+                FROM tasks
+                WHERE status IS NULL OR status != 'Completed'
+                """
+            ).fetchall()
+
+            tasks_list = [dict(t) for t in raw_tasks]
+            def task_sort_key(t):
+                dl = t.get("deadline") or ""
+                is_overdue = 0 if (dl and dl < today and t.get("status") != "Completed") else 1
+                deadline_val = dl if dl else "9999-12-31"
+                return (is_overdue, deadline_val, -t["id"])
+
+            tasks_list.sort(key=task_sort_key)
+            admin_pending_tasks = tasks_list[:10]
 
     return render_template_string(
         """
@@ -1294,6 +1313,80 @@ def dashboard():
                         </div>
                     </div>
                 </div>
+
+                <div class="card shadow-sm mb-4 border-0">
+                    <div class="card-header bg-white py-3 border-0 d-flex flex-wrap justify-content-between align-items-center gap-2">
+                        <h5 class="card-title mb-0 fw-bold text-primary"><i class="bi bi-clock-history me-2"></i>Pending Tasks</h5>
+                        <a href="{{ url_for('task_management') }}" class="btn btn-sm btn-outline-primary"><i class="bi bi-arrow-right-circle me-1"></i>View All Tasks</a>
+                    </div>
+                    <div class="card-body p-0">
+                        {% if admin_pending_tasks %}
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle mb-0">
+                                <thead class="table-light small">
+                                    <tr>
+                                        <th>Task Title</th>
+                                        <th>Assigned Employee</th>
+                                        <th>Priority</th>
+                                        <th>Due Date</th>
+                                        <th>Status</th>
+                                        <th class="text-end">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="small">
+                                    {% for task in admin_pending_tasks %}
+                                    <tr>
+                                        <td>
+                                            <a href="{{ url_for('task_management', edit_id=task.id) }}" class="text-decoration-none fw-bold text-dark me-1">{{ task.title or '' }}</a>
+                                            {% if task.deadline and task.deadline < today_str and task.status != 'Completed' %}
+                                                <span class="badge badge-overdue"><i class="bi bi-exclamation-circle-fill me-1"></i>OVERDUE</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            <span class="fw-semibold text-dark">{{ task.assigned_to or 'Unassigned' }}</span>
+                                        </td>
+                                        <td>
+                                            {% if task.priority == 'Critical' %}
+                                                <span class="badge badge-priority-critical"><i class="bi bi-exclamation-triangle-fill me-1"></i>Critical</span>
+                                            {% elif task.priority == 'High' %}
+                                                <span class="badge badge-priority-high"><i class="bi bi-arrow-up me-1"></i>High</span>
+                                            {% elif task.priority == 'Medium' %}
+                                                <span class="badge badge-priority-medium"><i class="bi bi-dash-lg me-1"></i>Medium</span>
+                                            {% else %}
+                                                <span class="badge badge-priority-low"><i class="bi bi-arrow-down me-1"></i>Low</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            <span class="{% if task.deadline and task.deadline < today_str and task.status != 'Completed' %}text-danger fw-bold{% else %}text-muted{% endif %}">
+                                                {{ task.deadline or 'N/A' }}
+                                            </span>
+                                        </td>
+                                        <td>
+                                            {% if task.status == 'In Progress' %}
+                                                <span class="badge bg-primary"><i class="bi bi-play-circle me-1"></i>In Progress</span>
+                                            {% elif task.status == 'Blocked' %}
+                                                <span class="badge bg-danger"><i class="bi bi-slash-circle me-1"></i>Blocked</span>
+                                            {% else %}
+                                                <span class="badge bg-warning text-dark"><i class="bi bi-clock me-1"></i>Pending</span>
+                                            {% endif %}
+                                        </td>
+                                        <td class="text-end">
+                                            <a href="{{ url_for('task_management', edit_id=task.id) }}" class="btn btn-sm btn-outline-primary" title="View / Edit Details">
+                                                <i class="bi bi-pencil-square me-1"></i>Details
+                                            </a>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                        {% else %}
+                        <div class="text-center py-4 text-muted">
+                            <p class="fs-5 mb-0 fw-medium">🎉 No pending tasks.</p>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
                 {% endif %}
 
                 <div class="card shadow-sm mb-4">
@@ -1361,6 +1454,8 @@ def dashboard():
         today_row=row,
         records=records,
         admin_summary=admin_summary,
+        admin_pending_tasks=admin_pending_tasks,
+        today_str=today,
     )
 
 
@@ -1779,66 +1874,6 @@ def update_task(task_id):
                 f"Task '{task['title']}' status updated to '{status}' by {current_user.username}.",
                 url_for("task_management"),
             )
-
-    flash("Task updated successfully.", "success")
-    return redirect(url_for("my_tasks"))
-
-    if task["assigned_to"] not in employee_names:
-        flash("Only assigned employees may update their own tasks.", "danger")
-        return redirect(url_for("my_tasks"))
-
-    hours_worked = request.form.get("hours_worked", "").strip()
-    work_notes = request.form.get("work_notes", "").strip()
-    status = request.form.get("status", "Pending").strip()
-
-    if hours_worked:
-        try:
-            hours_value = float(hours_worked)
-        except ValueError:
-            flash("Hours must be a valid number.", "danger")
-            return redirect(url_for("my_tasks"))
-        if hours_value <= 0:
-            flash("Hours cannot be zero or negative.", "danger")
-            return redirect(url_for("my_tasks"))
-    else:
-        hours_value = None
-
-    if status not in ["Pending", "In Progress", "Blocked", "Completed"]:
-        status = "Pending"
-
-    with get_db() as conn:
-        if hours_value is not None:
-            conn.execute(
-                "INSERT INTO time_logs (task_id, user_id, logged_date, hours_worked, notes) VALUES (?, ?, ?, ?, ?)",
-                (
-                    task_id,
-                    current_user.id,
-                    datetime.date.today().isoformat(),  # noqa: DTZ011  # Naive date for time logs
-                    hours_value,
-                    work_notes or None,
-                ),
-            )
-        if status != task["status"]:
-            completed_by = current_user.username if status == "Completed" else None
-            completion_date = datetime.date.today().isoformat() if status == "Completed" else None  # noqa: DTZ011
-            conn.execute(
-                "UPDATE tasks SET status = ?, completed_by = ?, completion_date = ? WHERE id = ?",
-                (status, completed_by, completion_date, task_id),
-            )
-            conn.commit()
-            notify_admins(
-                "Task Status Update",
-                f"Task '{task['title']}' status updated to '{status}' by {current_user.username}.",
-                url_for("task_management"),
-            )
-            notify_user_by_name_or_username(
-                task["assigned_by"],
-                "Task Status Update",
-                f"Task '{task['title']}' status updated to '{status}' by {current_user.username}.",
-                url_for("task_management"),
-            )
-        elif hours_value is not None:
-            conn.commit()
 
     flash("Task updated successfully.", "success")
     return redirect(url_for("my_tasks"))
