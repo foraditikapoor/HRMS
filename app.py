@@ -29,12 +29,12 @@ except Exception:  # noqa: BLE001  # Fallback manual env loader on import error
     else:
         print(f"DEBUG: no .env found at {dotenv_path}")
 import calendar
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 import secrets
 import smtplib
 import sqlite3
 import traceback
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 def send_email(to_email, subject, html_content, text_content=None):
     """Send an HTML email using SMTP configuration.
@@ -1155,10 +1155,6 @@ def calculate_employee_performance(conn, user_id):
                 "last_updated": last_updated,
             }
 
-        emp_row = conn.execute(
-            "SELECT id, name, department, salary FROM employees WHERE user_id = ?", (user_id,)
-        ).fetchone()
-
         # 1. Attendance Calculation (40% weight)
         cal_data = get_monthly_attendance_calendar_data(now.year, now.month, user_id)
         month_stats = cal_data.get("stats", {}) if cal_data else {}
@@ -1167,10 +1163,7 @@ def calculate_employee_performance(conn, user_id):
         if tot_workdays > 0:
             attendance_pct = float(month_stats.get("attendance_rate", 100.0))
         else:
-            att_count = conn.execute(
-                "SELECT COUNT(*) FROM attendance WHERE user_id = ?", (user_id,)
-            ).fetchone()[0]
-            attendance_pct = 100.0 if att_count >= 0 else 100.0
+            attendance_pct = 100.0
 
         attendance_component = (attendance_pct / 100.0) * 40.0
 
@@ -1250,7 +1243,7 @@ def calculate_employee_performance(conn, user_id):
         return {
             "user_id": user_id,
             "performance_score": final_score,
-            "performance_score_int": int(round(final_score)),
+            "performance_score_int": round(final_score),
             "performance_label": label,
             "badge_class": badge_class,
             "bar_class": bar_class,
@@ -5172,7 +5165,7 @@ def view_employee(emp_id):
             flash("Employee not found.", "warning")
             return redirect(url_for("admin_employees"))
 
-        user_id = r["user_id"] if ("user_id" in r.keys() and r["user_id"]) else None
+        user_id = r["user_id"] if ("user_id" in r and r["user_id"]) else None
         if not user_id and r["name"]:
             u = conn.execute(
                 "SELECT id FROM users WHERE full_name = ? OR username = ?",
