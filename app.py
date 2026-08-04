@@ -8014,77 +8014,22 @@ def employee_performance_profile(user_id):
             </div>
         </div>
 
-        <div class="row g-4 mb-4">
-            <div class="col-md-4">
-                <div class="card shadow-sm text-center py-4 h-100">
-                    <div class="card-body d-flex flex-column justify-content-center">
-                        <div class="user-avatar mx-auto mb-3 fs-3" style="width:72px; height:72px; background: #e0e7ff; color: #4338ca;">
+        <div class="card shadow-sm mb-4">
+            <div class="card-body py-4">
+                <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                    <div class="d-flex align-items-center gap-3">
+                        <div class="user-avatar fs-3 flex-shrink-0" style="width:72px; height:72px; background: #e0e7ff; color: #4338ca; display: flex; align-items: center; justify-content: center; border-radius: 50%;">
                             {{ (emp.full_name or emp.username)[:2]|upper }}
                         </div>
-                        <h4 class="h5 mb-1 fw-bold">{{ emp.full_name or emp.username }}</h4>
-                        <p class="text-muted small mb-3">@{{ emp.username }} • <span class="badge bg-light text-dark border">{{ emp.role }}</span></p>
-                        
-                        <div class="border-top pt-3">
-                            <div class="text-muted small fw-semibold">Overall Score Average</div>
-                            <div class="display-6 fw-bold text-primary my-1">{{ '%.1f'|format(avg_overall) }} <span class="fs-4 text-warning">★</span></div>
-                            <div class="text-muted small">Based on {{ reviews|length }} review{% if reviews|length != 1 %}s{% endif %}</div>
+                        <div>
+                            <h4 class="h5 mb-1 fw-bold">{{ emp.full_name or emp.username }}</h4>
+                            <p class="text-muted small mb-0">@{{ emp.username }} • <span class="badge bg-light text-dark border">{{ emp.role }}</span></p>
                         </div>
                     </div>
-                </div>
-            </div>
-            
-            <div class="col-md-8">
-                <div class="card shadow-sm h-100">
-                    <div class="card-header bg-white py-3 border-0">
-                        <h5 class="card-title fw-bold mb-0"><i class="bi bi-radar me-2 text-primary"></i>Skill Competency Matrix</h5>
-                    </div>
-                    <div class="card-body">
-                        <div class="row align-items-center">
-                            <div class="col-md-6 mb-3 mb-md-0" style="height: 220px; position: relative;">
-                                <canvas id="skillRadarChart"></canvas>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="mb-3">
-                                    <div class="d-flex justify-content-between mb-1">
-                                        <span class="fw-semibold small"><i class="bi bi-code-slash text-primary me-1"></i>Technical Skills</span>
-                                        <span class="fw-bold small">{{ '%.1f'|format(avg_tech) }} / 5.0</span>
-                                    </div>
-                                    <div class="progress" style="height: 8px;">
-                                        <div class="progress-bar bg-primary" role="progressbar" style="width: {{ (avg_tech / 5.0) * 100 }}%;"></div>
-                                    </div>
-                                </div>
-                                
-                                <div class="mb-3">
-                                    <div class="d-flex justify-content-between mb-1">
-                                        <span class="fw-semibold small"><i class="bi bi-chat-dots text-info me-1"></i>Communication</span>
-                                        <span class="fw-bold small">{{ '%.1f'|format(avg_comm) }} / 5.0</span>
-                                    </div>
-                                    <div class="progress" style="height: 8px;">
-                                        <div class="progress-bar bg-info" role="progressbar" style="width: {{ (avg_comm / 5.0) * 100 }}%;"></div>
-                                    </div>
-                                </div>
-
-                                <div class="mb-3">
-                                    <div class="d-flex justify-content-between mb-1">
-                                        <span class="fw-semibold small"><i class="bi bi-lightning-charge text-success me-1"></i>Productivity</span>
-                                        <span class="fw-bold small">{{ '%.1f'|format(avg_prod) }} / 5.0</span>
-                                    </div>
-                                    <div class="progress" style="height: 8px;">
-                                        <div class="progress-bar bg-success" role="progressbar" style="width: {{ (avg_prod / 5.0) * 100 }}%;"></div>
-                                    </div>
-                                </div>
-
-                                <div class="mb-0">
-                                    <div class="d-flex justify-content-between mb-1">
-                                        <span class="fw-semibold small"><i class="bi bi-people-fill text-warning me-1"></i>Teamwork</span>
-                                        <span class="fw-bold small">{{ '%.1f'|format(avg_team) }} / 5.0</span>
-                                    </div>
-                                    <div class="progress" style="height: 8px;">
-                                        <div class="progress-bar bg-warning" role="progressbar" style="width: {{ (avg_team / 5.0) * 100 }}%;"></div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                    <div class="text-start text-md-end border-start-md ps-md-4">
+                        <div class="text-muted small fw-semibold">Overall Review Average</div>
+                        <div class="display-6 fw-bold text-primary my-1">{{ '%.1f'|format(avg_overall) }} <span class="fs-4 text-warning">★</span></div>
+                        <div class="text-muted small">Based on {{ reviews|length }} review{% if reviews|length != 1 %}s{% endif %}</div>
                     </div>
                 </div>
             </div>
@@ -8145,41 +8090,6 @@ def employee_performance_profile(user_id):
                 </div>
             </div>
         </div>
-
-        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-        <script>
-            document.addEventListener('DOMContentLoaded', function() {
-                const ctxRadar = document.getElementById('skillRadarChart').getContext('2d');
-                new Chart(ctxRadar, {
-                    type: 'radar',
-                    data: {
-                        labels: ['Technical', 'Communication', 'Productivity', 'Teamwork'],
-                        datasets: [{
-                            label: 'Average Score',
-                            data: [{{ avg_tech }}, {{ avg_comm }}, {{ avg_prod }}, {{ avg_team }}],
-                            backgroundColor: 'rgba(79, 70, 229, 0.2)',
-                            borderColor: '#4f46e5',
-                            pointBackgroundColor: '#4f46e5',
-                            pointBorderColor: '#fff',
-                            pointHoverBackgroundColor: '#fff',
-                            pointHoverBorderColor: '#4f46e5'
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        scales: {
-                            r: {
-                                angleLines: { display: true },
-                                suggestedMin: 0,
-                                suggestedMax: 5
-                            }
-                        },
-                        plugins: { legend: { display: false } }
-                    }
-                });
-            });
-        </script>
         {% endblock %}
         """,
         emp=emp_user,
