@@ -29,12 +29,12 @@ except Exception:  # noqa: BLE001  # Fallback manual env loader on import error
     else:
         print(f"DEBUG: no .env found at {dotenv_path}")
 import calendar
-import secrets  # noqa: I001
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import secrets
 import smtplib
 import sqlite3
 import traceback
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 def send_email(to_email, subject, html_content, text_content=None):
     """Send an HTML email using SMTP configuration.
@@ -333,15 +333,19 @@ def send_leave_rejection_email_to_employee(user_id, req_details, rejection_reaso
         traceback.print_exc()
 
 
+import datetime
+import io
+from zoneinfo import ZoneInfo
+
 from flask import (
     Flask,
+    Response,
     flash,
     jsonify,
     redirect,
     render_template_string,
     request,
     url_for,
-    Response,
 )
 from flask_login import (
     LoginManager,
@@ -353,9 +357,6 @@ from flask_login import (
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
-import datetime
-from zoneinfo import ZoneInfo
-import io
 
 try:
     IST = ZoneInfo("Asia/Kolkata")
@@ -536,35 +537,6 @@ def save_uploaded_file(file_storage):
     return dest_path
 
 
-def send_welcome_email(recipient_email, full_name, username, temporary_password):
-    """Send a welcome email with login info using Gmail SMTP.
-
-    Uses `EMAIL_ADDRESS` and `EMAIL_APP_PASSWORD` for authentication.
-    This function prints errors and does not raise on failure.
-    """
-    subject = "Welcome to the User Management System"
-    body = (
-        f"Hello {full_name},\n\n"
-        "Your account has been created successfully.\n\n"
-        f"Username: {username}\n"
-        f"Temporary Password: {temporary_password}\n\n"
-        "Login here:\nhttps://hrmsapp.pythonanywhere.com/login\n\n"
-        "Please change your password after logging in.\n"
-    )
-    msg = MIMEText(body)
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_ADDRESS
-    msg["To"] = recipient_email
-    try:
-        print(f"DEBUG SMTP: {MAIL_SERVER}:{MAIL_PORT}")
-        with smtplib.SMTP(MAIL_SERVER, MAIL_PORT, timeout=10) as server:
-            server.starttls()
-            server.login(MAIL_USERNAME, MAIL_PASSWORD)
-            server.send_message(msg)
-        print("DEBUG: Welcome email sent successfully")
-    except Exception:  # noqa: BLE001  # Email send fallback error handling
-        traceback.print_exc()
-
 
 def ensure_user_columns():
     with get_db() as conn:
@@ -620,7 +592,7 @@ def ensure_holidays_table():
         # Seed default Indian company holidays if empty
         row_count = conn.execute("SELECT COUNT(*) FROM holidays").fetchone()[0]
         if row_count == 0:
-            current_yr = datetime.date.today().year
+            current_yr = datetime.datetime.now(tz=IST).year
             default_holidays = [
                 ("New Year's Day", f"{current_yr}-01-01", "Official Holiday"),
                 ("Republic Day", f"{current_yr}-01-26", "National Holiday"),
@@ -1117,8 +1089,184 @@ def month_name_filter(month_num):
     try:
         m = int(month_num)
         return datetime.date(2000, m, 1).strftime("%B")
-    except Exception:
+    except Exception:  # noqa: BLE001
         return str(month_num)
+
+
+def calculate_employee_performance(conn, user_id):
+    """Calculate an Employee Performance Score (0-100%) automatically using existing HRMS data.
+
+    Weights:
+    - Attendance: 40%
+    - Task Completion: 40%
+    - Leave Behaviour: 10%
+    - Overdue Tasks: 10%
+    """
+    if not user_id:
+        now = datetime.datetime.now(tz=IST)
+        return {
+            "user_id": None,
+            "performance_score": 0.0,
+            "performance_score_int": 0,
+            "performance_label": "Needs Improvement",
+            "badge_class": "bg-danger text-white",
+            "bar_class": "bg-danger",
+            "attendance_pct": 0.0,
+            "task_completion_pct": 0.0,
+            "approved_leaves": 0,
+            "approved_leave_days": 0.0,
+            "completed_tasks": 0,
+            "pending_tasks": 0,
+            "overdue_tasks": 0,
+            "total_tasks": 0,
+            "last_updated": now.strftime("%d %b %Y, %I:%M %p"),
+        }
+
+    close_conn = False
+    if conn is None:
+        conn = get_db()
+        close_conn = True
+
+    try:
+        now = datetime.datetime.now(tz=IST)
+        today_iso = now.date().isoformat()
+        last_updated = now.strftime("%d %b %Y, %I:%M %p")
+
+        user_row = conn.execute(
+            "SELECT id, username, full_name, role FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+
+        if not user_row:
+            return {
+                "user_id": user_id,
+                "performance_score": 0.0,
+                "performance_score_int": 0,
+                "performance_label": "Needs Improvement",
+                "badge_class": "bg-danger text-white",
+                "bar_class": "bg-danger",
+                "attendance_pct": 0.0,
+                "task_completion_pct": 0.0,
+                "approved_leaves": 0,
+                "approved_leave_days": 0.0,
+                "completed_tasks": 0,
+                "pending_tasks": 0,
+                "overdue_tasks": 0,
+                "total_tasks": 0,
+                "last_updated": last_updated,
+            }
+
+        emp_row = conn.execute(
+            "SELECT id, name, department, salary FROM employees WHERE user_id = ?", (user_id,)
+        ).fetchone()
+
+        # 1. Attendance Calculation (40% weight)
+        cal_data = get_monthly_attendance_calendar_data(now.year, now.month, user_id)
+        month_stats = cal_data.get("stats", {}) if cal_data else {}
+        tot_workdays = month_stats.get("present_count", 0) + month_stats.get("absent_count", 0)
+
+        if tot_workdays > 0:
+            attendance_pct = float(month_stats.get("attendance_rate", 100.0))
+        else:
+            att_count = conn.execute(
+                "SELECT COUNT(*) FROM attendance WHERE user_id = ?", (user_id,)
+            ).fetchone()[0]
+            attendance_pct = 100.0 if att_count >= 0 else 100.0
+
+        attendance_component = (attendance_pct / 100.0) * 40.0
+
+        # 2. Task Completion (40%) & Overdue Tasks (10%)
+        class TempUser:
+            def __init__(self, uid, uname):
+                self.id = uid
+                self.username = uname
+
+        temp_user = TempUser(user_id, user_row["username"])
+        task_names = get_user_task_names(conn, temp_user)
+
+        if task_names:
+            placeholders = ", ".join("?" for _ in task_names)
+            tasks_rows = conn.execute(
+                f"SELECT id, status, deadline FROM tasks WHERE assigned_to IN ({placeholders})",
+                list(task_names),
+            ).fetchall()
+        else:
+            tasks_rows = []
+
+        total_tasks = len(tasks_rows)
+        completed_tasks = sum(1 for t in tasks_rows if (t["status"] or "").strip() == "Completed")
+        pending_tasks = sum(1 for t in tasks_rows if (t["status"] or "").strip() != "Completed")
+
+        overdue_tasks = sum(
+            1 for t in tasks_rows
+            if (t["status"] or "").strip() != "Completed"
+            and t["deadline"]
+            and str(t["deadline"]).strip() < today_iso
+        )
+
+        if total_tasks > 0:
+            task_completion_pct = (completed_tasks / total_tasks) * 100.0
+        else:
+            task_completion_pct = 100.0
+
+        task_component = (task_completion_pct / 100.0) * 40.0
+        overdue_component = max(0.0, 10.0 - (overdue_tasks * 2.5))
+
+        # 3. Leave Behaviour (10% weight)
+        approved_leave_row = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(total_days), 0) FROM leave_requests WHERE user_id = ? AND status = 'Approved'",
+            (user_id,),
+        ).fetchone()
+
+        approved_leaves_count = approved_leave_row[0] if approved_leave_row else 0
+        approved_leave_days = float(approved_leave_row[1]) if approved_leave_row else 0.0
+
+        if approved_leave_days <= 3.0:
+            leave_component = 10.0
+        else:
+            excess_days = approved_leave_days - 3.0
+            leave_component = max(0.0, 10.0 - (excess_days * 0.5))
+
+        # Final Score Calculation (Clamped between 0 and 100)
+        raw_score = attendance_component + task_component + leave_component + overdue_component
+        final_score = round(max(0.0, min(100.0, raw_score)), 1)
+
+        if final_score >= 85.0:
+            label = "Excellent"
+            badge_class = "bg-success text-white"
+            bar_class = "bg-success"
+        elif final_score >= 70.0:
+            label = "Good"
+            badge_class = "bg-info text-dark"
+            bar_class = "bg-info"
+        elif final_score >= 50.0:
+            label = "Average"
+            badge_class = "bg-warning text-dark"
+            bar_class = "bg-warning"
+        else:
+            label = "Needs Improvement"
+            badge_class = "bg-danger text-white"
+            bar_class = "bg-danger"
+
+        return {
+            "user_id": user_id,
+            "performance_score": final_score,
+            "performance_score_int": int(round(final_score)),
+            "performance_label": label,
+            "badge_class": badge_class,
+            "bar_class": bar_class,
+            "attendance_pct": round(attendance_pct, 1),
+            "task_completion_pct": round(task_completion_pct, 1),
+            "approved_leaves": approved_leaves_count,
+            "approved_leave_days": approved_leave_days,
+            "completed_tasks": completed_tasks,
+            "pending_tasks": pending_tasks,
+            "overdue_tasks": overdue_tasks,
+            "total_tasks": total_tasks,
+            "last_updated": last_updated,
+        }
+    finally:
+        if close_conn:
+            conn.close()
 
 
 def init_db():
@@ -3681,7 +3829,7 @@ def is_late_punch(punch_in_str):
         if dt.tzinfo is not None:
             dt = dt.astimezone(IST)
         return (dt.hour > 9) or (dt.hour == 9 and dt.minute > 30)
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
 
 
@@ -3691,7 +3839,7 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
     first_weekday = calendar.monthrange(year, month)[0]  # 0 = Monday ... 6 = Sunday
     start_date_str = f"{year:04d}-{month:02d}-01"
     end_date_str = f"{year:04d}-{month:02d}-{num_days:02d}"
-    today_str = datetime.date.today().isoformat()
+    today_str = datetime.datetime.now(tz=IST).date().isoformat()
 
     with get_db() as conn:
         user_info = conn.execute(
@@ -3761,7 +3909,7 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
             if att_entry["total_hours"]:
                 try:
                     total_hours_sum += float(att_entry["total_hours"])
-                except Exception:
+                except (ValueError, TypeError):
                     pass
         elif leave_entry and leave_entry["status"] == "Approved":
             status = "Leave"
@@ -3950,7 +4098,7 @@ def get_admin_monthly_matrix_data(year, month):
 @login_required
 def employee_attendance_calendar():
     """Employee Attendance Calendar View"""
-    today = datetime.date.today()
+    today = datetime.datetime.now(tz=IST).date()
     year = request.args.get("year", type=int, default=today.year)
     month = request.args.get("month", type=int, default=today.month)
 
@@ -4226,7 +4374,7 @@ def admin_attendance():
         flash("Admin access required.", "danger")
         return redirect(url_for("dashboard"))
 
-    today = datetime.date.today()
+    today = datetime.datetime.now(tz=IST).date()
     year = request.args.get("year", type=int, default=today.year)
     month = request.args.get("month", type=int, default=today.month)
     selected_user_id = request.args.get("user_id", type=str, default="all").strip()
@@ -4667,7 +4815,7 @@ def admin_attendance():
 @login_required
 def api_attendance_calendar_events():
     """API Endpoint returning JSON attendance calendar data for dynamic client-side rendering."""
-    today = datetime.date.today()
+    today = datetime.datetime.now(tz=IST).date()
     year = request.args.get("year", type=int, default=today.year)
     month = request.args.get("month", type=int, default=today.month)
     target_user_id = request.args.get("user_id", type=int, default=current_user.id)
@@ -5023,6 +5171,18 @@ def view_employee(emp_id):
         if not r:
             flash("Employee not found.", "warning")
             return redirect(url_for("admin_employees"))
+
+        user_id = r["user_id"] if ("user_id" in r.keys() and r["user_id"]) else None
+        if not user_id and r["name"]:
+            u = conn.execute(
+                "SELECT id FROM users WHERE full_name = ? OR username = ?",
+                (r["name"], r["name"]),
+            ).fetchone()
+            if u:
+                user_id = u["id"]
+
+        perf = calculate_employee_performance(conn, user_id)
+
     return render_template_string(
         """
             <!doctype html>
@@ -5030,27 +5190,90 @@ def view_employee(emp_id):
             <head>
                 <meta charset="utf-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1">
-                <title>View Employee</title>
+                <title>View Employee - {{ r.name }}</title>
                 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+                <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
             </head>
             <body class="bg-light">
                 <div class="container py-5">
-                    <div class="card shadow-sm mx-auto" style="max-width: 800px;">
+                    <div class="card shadow-sm mx-auto mb-4" style="max-width: 800px;">
                         <div class="card-body">
                             <div class="d-flex align-items-center mb-3">
                                 <a class="btn btn-outline-secondary me-3" href="{{ url_for('admin_employees') }}">Back</a>
                                 <h1 class="h3 mb-0">{{ r.name }}</h1>
                             </div>
-                            <p><strong>Department:</strong> {{ r.department }}</p>
-                            <p><strong>Address:</strong><br>{{ r.address }}</p>
-                            <p><strong>Education:</strong> {{ r.education }}</p>
-                            <p><strong>Experience:</strong> {{ r.experience }}</p>
+                            <p><strong>Department:</strong> {{ r.department or 'N/A' }}</p>
+                            <p><strong>Address:</strong><br>{{ r.address or 'N/A' }}</p>
+                            <p><strong>Education:</strong> {{ r.education or 'N/A' }}</p>
+                            <p><strong>Experience:</strong> {{ r.experience or 'N/A' }}</p>
                             <p><strong>Contact Number:</strong> {{ r.contact_number or '' }}</p>
-                            <p><strong>Emergency Contact:</strong> {{ r.emergency_contact }}</p>
+                            <p><strong>Emergency Contact:</strong> {{ r.emergency_contact or 'N/A' }}</p>
                             <p><strong>Salary:</strong> {{ r.salary | inr if r.salary else 'N/A' }}</p>
                             <p><strong>PAN:</strong> {% if r.pan_path %}<a href="/{{ r.pan_path }}">Download</a>{% else %}N/A{% endif %}</p>
                             <p><strong>Aadhaar:</strong> {% if r.aadhaar_path %}<a href="/{{ r.aadhaar_path }}">Download</a>{% else %}N/A{% endif %}</p>
                             <p><strong>Other Docs:</strong> {% if r.other_docs_path %}<a href="/{{ r.other_docs_path }}">Download</a>{% else %}N/A{% endif %}</p>
+                            
+                            <hr class="my-4">
+
+                            <!-- Performance Section -->
+                            <div class="p-3 bg-light rounded border">
+                                <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+                                    <h5 class="mb-0 fw-bold text-dark"><i class="bi bi-graph-up-arrow me-2 text-primary"></i>Performance Section</h5>
+                                    <span class="badge {{ perf.badge_class }} fs-6 px-3 py-1">{{ perf.performance_label }}</span>
+                                </div>
+                                <div class="row align-items-center g-3 mb-3">
+                                    <div class="col-md-4 text-center border-end">
+                                        <div class="text-muted small fw-semibold">Performance Score</div>
+                                        <div class="display-6 fw-bold text-primary my-1">{{ perf.performance_score }}%</div>
+                                        <div class="progress mb-2" style="height: 10px;">
+                                            <div class="progress-bar {{ perf.bar_class }}" role="progressbar" style="width: {{ perf.performance_score }}%;" aria-valuenow="{{ perf.performance_score }}" aria-valuemin="0" aria-valuemax="100"></div>
+                                        </div>
+                                        <div class="text-muted small" style="font-size: 0.75rem;">
+                                            <i class="bi bi-clock me-1"></i>Last Updated: {{ perf.last_updated }}
+                                        </div>
+                                    </div>
+                                    <div class="col-md-8">
+                                        <div class="row g-2">
+                                            <div class="col-6">
+                                                <div class="p-2 bg-white rounded border text-center">
+                                                    <span class="text-muted small d-block">Attendance %</span>
+                                                    <strong class="text-success">{{ perf.attendance_pct }}%</strong>
+                                                </div>
+                                            </div>
+                                            <div class="col-6">
+                                                <div class="p-2 bg-white rounded border text-center">
+                                                    <span class="text-muted small d-block">Task Completion %</span>
+                                                    <strong class="text-primary">{{ perf.task_completion_pct }}%</strong>
+                                                </div>
+                                            </div>
+                                            <div class="col-6">
+                                                <div class="p-2 bg-white rounded border text-center">
+                                                    <span class="text-muted small d-block">Approved Leaves</span>
+                                                    <strong class="text-info">{{ perf.approved_leaves }}</strong>
+                                                </div>
+                                            </div>
+                                            <div class="col-6">
+                                                <div class="p-2 bg-white rounded border text-center">
+                                                    <span class="text-muted small d-block">Overdue Tasks</span>
+                                                    <strong class="{% if perf.overdue_tasks > 0 %}text-danger{% else %}text-secondary{% endif %}">{{ perf.overdue_tasks }}</strong>
+                                                </div>
+                                            </div>
+                                            <div class="col-6">
+                                                <div class="p-2 bg-white rounded border text-center">
+                                                    <span class="text-muted small d-block">Completed Tasks</span>
+                                                    <strong class="text-success">{{ perf.completed_tasks }}</strong>
+                                                </div>
+                                            </div>
+                                            <div class="col-6">
+                                                <div class="p-2 bg-white rounded border text-center">
+                                                    <span class="text-muted small d-block">Pending Tasks</span>
+                                                    <strong class="text-warning text-dark">{{ perf.pending_tasks }}</strong>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -5058,6 +5281,7 @@ def view_employee(emp_id):
             </html>
             """,
         r=r,
+        perf=perf,
     )
 
 
@@ -6303,7 +6527,7 @@ def apply_leave():
                 "reason": reason,
                 "applied_date": applied_date,
             })
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print("Failed to trigger admin leave submission email:", e)
 
         msg = "Leave request submitted successfully."
@@ -6942,7 +7166,7 @@ def approve_leave(leave_id):
             dict(req),
             comments=comments,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print("Failed to trigger leave approval email:", e)
 
     msg = "Leave request approved successfully."
@@ -7033,7 +7257,7 @@ def reject_leave(leave_id):
             rejection_reason=rejection_reason,
             comments=comments,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print("Failed to trigger leave rejection email:", e)
 
     msg = "Leave request rejected successfully."
@@ -7368,6 +7592,8 @@ def employee_performance_profile(user_id):
         else:
             avg_overall = avg_tech = avg_comm = avg_prod = avg_team = 0.0
 
+        perf = calculate_employee_performance(conn, user_id)
+
     return render_template_string(
         """
         {% extends "base.html" %}
@@ -7396,6 +7622,79 @@ def employee_performance_profile(user_id):
                 {% endfor %}
             {% endif %}
         {% endwith %}
+
+        <!-- Automated HRMS Performance Score Section -->
+        <div class="card shadow-sm mb-4 border-0 border-start border-primary border-4">
+            <div class="card-header bg-white py-3 border-0 d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <h5 class="card-title fw-bold mb-0 text-dark">
+                    <i class="bi bi-cpu-fill me-2 text-primary"></i>Automated HRMS Performance Score
+                </h5>
+                <span class="badge {{ perf.badge_class }} fs-6 px-3 py-2 fw-semibold">
+                    {{ perf.performance_label }}
+                </span>
+            </div>
+            <div class="card-body">
+                <div class="row align-items-center g-4">
+                    <div class="col-md-4 text-center border-end-md">
+                        <div class="text-muted small fw-semibold text-uppercase">Performance Score</div>
+                        <div class="display-4 fw-bold text-primary my-2">{{ perf.performance_score }}%</div>
+                        <div class="progress mb-2 mx-auto" style="height: 12px; max-width: 85%;">
+                            <div class="progress-bar {{ perf.bar_class }}" role="progressbar" style="width: {{ perf.performance_score }}%;" aria-valuenow="{{ perf.performance_score }}" aria-valuemin="0" aria-valuemax="100"></div>
+                        </div>
+                        <div class="text-muted small">
+                            <i class="bi bi-clock-history me-1"></i>Last Updated: {{ perf.last_updated }}
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-8">
+                        <div class="row g-3">
+                            <div class="col-6 col-md-3">
+                                <div class="p-3 bg-light rounded text-center h-100 border">
+                                    <div class="text-muted small fw-semibold">Attendance %</div>
+                                    <div class="fs-5 fw-bold text-success mt-1">{{ perf.attendance_pct }}%</div>
+                                </div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="p-3 bg-light rounded text-center h-100 border">
+                                    <div class="text-muted small fw-semibold">Task Completion %</div>
+                                    <div class="fs-5 fw-bold text-primary mt-1">{{ perf.task_completion_pct }}%</div>
+                                </div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="p-3 bg-light rounded text-center h-100 border">
+                                    <div class="text-muted small fw-semibold">Approved Leaves</div>
+                                    <div class="fs-5 fw-bold text-info mt-1">{{ perf.approved_leaves }}</div>
+                                </div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="p-3 bg-light rounded text-center h-100 border">
+                                    <div class="text-muted small fw-semibold">Overdue Tasks</div>
+                                    <div class="fs-5 fw-bold {% if perf.overdue_tasks > 0 %}text-danger{% else %}text-secondary{% endif %} mt-1">{{ perf.overdue_tasks }}</div>
+                                </div>
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <div class="p-2 border rounded d-flex justify-content-between align-items-center bg-white">
+                                    <span class="small text-muted fw-semibold">Completed Tasks:</span>
+                                    <span class="fw-bold text-success">{{ perf.completed_tasks }}</span>
+                                </div>
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <div class="p-2 border rounded d-flex justify-content-between align-items-center bg-white">
+                                    <span class="small text-muted fw-semibold">Pending Tasks:</span>
+                                    <span class="fw-bold text-warning text-dark">{{ perf.pending_tasks }}</span>
+                                </div>
+                            </div>
+                            <div class="col-12 col-md-4">
+                                <div class="p-2 border rounded d-flex justify-content-between align-items-center bg-white">
+                                    <span class="small text-muted fw-semibold">Total Assigned:</span>
+                                    <span class="fw-bold text-dark">{{ perf.total_tasks }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <div class="row g-4 mb-4">
             <div class="col-md-4">
@@ -7572,6 +7871,7 @@ def employee_performance_profile(user_id):
         avg_comm=avg_comm,
         avg_prod=avg_prod,
         avg_team=avg_team,
+        perf=perf,
     )
 
 
@@ -9827,6 +10127,30 @@ def settings_payroll():
             "SELECT currency FROM company_settings WHERE id = 1"
         ).fetchone()
 
+        emp_rows = conn.execute(
+            "SELECT id, user_id, name, department, salary FROM employees ORDER BY name"
+        ).fetchall()
+
+        payroll_list = []
+        for emp in emp_rows:
+            user_id = emp["user_id"]
+            if not user_id and emp["name"]:
+                u = conn.execute(
+                    "SELECT id FROM users WHERE full_name = ? OR username = ?",
+                    (emp["name"], emp["name"]),
+                ).fetchone()
+                if u:
+                    user_id = u["id"]
+
+            perf = calculate_employee_performance(conn, user_id)
+            payroll_list.append({
+                "emp_id": emp["id"],
+                "name": emp["name"],
+                "department": emp["department"] or "N/A",
+                "salary": emp["salary"],
+                "perf": perf,
+            })
+
     currency = cs["currency"] if cs else "INR (₹)"
 
     return render_template_string(
@@ -9852,7 +10176,7 @@ def settings_payroll():
             {% endif %}
         {% endwith %}
 
-        <div class="card shadow-sm">
+        <div class="card shadow-sm mb-4">
             <div class="card-header bg-white py-3 border-0">
                 <h5 class="card-title mb-0 fw-bold"><i class="bi bi-cash-stack me-2 text-success"></i>Global Currency & Payroll Parameters</h5>
             </div>
@@ -9886,9 +10210,63 @@ def settings_payroll():
                 </form>
             </div>
         </div>
+
+        <!-- Employee Salary & Performance Breakdown Table -->
+        <div class="card shadow-sm">
+            <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-wallet2 me-2 text-primary"></i>Employee Salary & Performance Breakdown</h5>
+                <span class="badge bg-light text-dark border">Informational Breakdown</span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Employee</th>
+                                <th>Department</th>
+                                <th>Base Salary</th>
+                                <th>Performance %</th>
+                                <th>Attendance %</th>
+                                <th>Approved Leaves</th>
+                                <th>Completed Tasks</th>
+                                <th>Overdue Tasks</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in payroll_list %}
+                                <tr>
+                                    <td class="fw-bold">
+                                        <i class="bi bi-person-circle me-1 text-primary"></i>{{ item.name }}
+                                    </td>
+                                    <td><span class="badge bg-light text-dark border">{{ item.department }}</span></td>
+                                    <td class="fw-bold text-dark">{{ item.salary | inr if item.salary else 'N/A' }}</td>
+                                    <td>
+                                        <span class="badge {{ item.perf.badge_class }} me-1">{{ item.perf.performance_label }}</span>
+                                        <strong>{{ item.perf.performance_score }}%</strong>
+                                    </td>
+                                    <td><span class="text-success fw-semibold">{{ item.perf.attendance_pct }}%</span></td>
+                                    <td><span class="text-info fw-semibold">{{ item.perf.approved_leaves }}</span></td>
+                                    <td><span class="text-primary fw-semibold">{{ item.perf.completed_tasks }}</span></td>
+                                    <td>
+                                        <span class="{% if item.perf.overdue_tasks > 0 %}text-danger fw-bold{% else %}text-muted{% endif %}">
+                                            {{ item.perf.overdue_tasks }}
+                                        </span>
+                                    </td>
+                                </tr>
+                            {% else %}
+                                <tr>
+                                    <td colspan="8" class="text-center py-4 text-muted">No employee salary records found.</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
         {% endblock %}
         """,
         currency=currency,
+        payroll_list=payroll_list,
     )
 
 
