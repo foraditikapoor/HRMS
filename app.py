@@ -4174,10 +4174,12 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
 
         notes_txt = ""
         if holiday_entry:
-            h_type = dict(holiday_entry).get("holiday_type") or "Public Holiday"
-            h_paid = "Paid" if (dict(holiday_entry).get("is_paid") in (1, "1", "Yes")) else "Unpaid"
-            desc = f" - {holiday_entry['description']}" if holiday_entry.get("description") else ""
-            notes_txt = f"Holiday: {holiday_entry['title']} ({h_type}, {h_paid}){desc}"
+            h_dict = dict(holiday_entry)
+            h_type = h_dict.get("holiday_type") or "Public Holiday"
+            h_paid = "Paid" if (h_dict.get("is_paid") in (1, "1", "Yes")) else "Unpaid"
+            h_desc = h_dict.get("description") or ""
+            desc = f" - {h_desc}" if h_desc else ""
+            notes_txt = f"Holiday: {h_dict.get('title', 'Holiday')} ({h_type}, {h_paid}){desc}"
         elif leave_entry:
             notes_txt = f"Leave Reason: {leave_entry['reason'] or leave_entry['leave_type']}"
 
@@ -4201,7 +4203,7 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
                 "total_hours": att_entry["total_hours"] if att_entry else None,
                 "total_hours_fmt": hrs_fmt,
                 "leave_type": leave_entry["leave_type"] if leave_entry else None,
-                "holiday_name": holiday_entry["title"] if holiday_entry else None,
+                "holiday_name": dict(holiday_entry).get("title") if holiday_entry else None,
                 "holiday_type": dict(holiday_entry).get("holiday_type", "Public Holiday") if holiday_entry else None,
                 "is_paid": ("Paid" if dict(holiday_entry).get("is_paid") in (1, "1", "Yes") else "Unpaid") if holiday_entry else None,
                 "notes": notes_txt,
