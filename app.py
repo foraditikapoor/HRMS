@@ -33,6 +33,7 @@ import json
 import secrets
 import smtplib
 import sqlite3
+import time
 import traceback
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -454,22 +455,32 @@ login_manager.login_view = "login"  # pyright: ignore[reportAttributeAccessIssue
 
 class User(UserMixin):
     def __init__(
-        self, user_id, username, password_hash, role="user", force_password_change=False
+        self, user_id, username, password_hash, role="user", force_password_change=False, profile_pic=None, last_active_at=None
     ):
         self.id = user_id
         self.username = username
         self.password_hash = password_hash
         self.role = role
         self.force_password_change = bool(force_password_change)
+        self.profile_pic = profile_pic
+        self.last_active_at = last_active_at
 
     @staticmethod
     def from_db(row):
         if row is None:
             return None
-        # row expected: id, username, password_hash, role, [force_password_change]
         try:
-            return User(row[0], row[1], row[2], row[3], row[4])
-        except Exception:  # noqa: BLE001  # Fallback when row indexing fails
+            r = dict(row)
+            return User(
+                r.get("id"),
+                r.get("username"),
+                r.get("password_hash"),
+                r.get("role", "user"),
+                r.get("force_password_change", False),
+                r.get("profile_pic"),
+                r.get("last_active_at"),
+            )
+        except Exception:  # noqa: BLE001
             return User(row[0], row[1], row[2], row[3], False)
 
 
@@ -553,7 +564,64 @@ def ensure_user_columns():
             conn.execute(
                 "ALTER TABLE users ADD COLUMN force_password_change INTEGER DEFAULT 0"
             )
+        if "profile_pic" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN profile_pic TEXT")
+        if "last_active_at" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN last_active_at TEXT")
         conn.commit()
+
+
+def is_user_online(last_active_at_str):
+    if not last_active_at_str:
+        return False
+    try:
+        dt = datetime.datetime.strptime(last_active_at_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST)
+        now = datetime.datetime.now(tz=IST)
+        return (now - dt).total_seconds() < 300
+    except Exception:
+        return False
+
+
+UPLOAD_PROFILE_PICS_DIR = os.path.join(app.root_path, "static", "uploads", "profile_pics")
+os.makedirs(UPLOAD_PROFILE_PICS_DIR, exist_ok=True)
+ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
+MAX_IMAGE_SIZE = 2 * 1024 * 1024  # 2 MB
+
+
+def process_and_save_profile_pic(file_storage, user_id):
+    if not file_storage or not file_storage.filename:
+        return None, "No file selected."
+
+    ext = file_storage.filename.rsplit(".", 1)[-1].lower() if "." in file_storage.filename else ""
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        return None, "Invalid file format. Please upload a JPG, JPEG, PNG, or WEBP image."
+
+    file_storage.seek(0, os.SEEK_END)
+    file_length = file_storage.tell()
+    file_storage.seek(0)
+
+    if file_length > MAX_IMAGE_SIZE:
+        return None, "File size exceeds maximum limit of 2 MB."
+
+    unique_name = f"user_{user_id}_{int(time.time())}_{secrets.token_hex(4)}.{ext}"
+    dest_path = os.path.join(UPLOAD_PROFILE_PICS_DIR, unique_name)
+
+    try:
+        from PIL import Image
+        img = Image.open(file_storage)
+        if ext in ("jpg", "jpeg"):
+            img = img.convert("RGB")
+        width, height = img.size
+        if width != 256 or height != 256:
+            resample_mode = getattr(Image, "Resampling", Image).LANCZOS
+            img = img.resize((256, 256), resample_mode)
+        img.save(dest_path)
+    except Exception:
+        file_storage.seek(0)
+        file_storage.save(dest_path)
+
+    rel_path = f"uploads/profile_pics/{unique_name}"
+    return rel_path, None
 
 
 def ensure_attendance_table():
@@ -1532,10 +1600,25 @@ init_db()
 def load_user(user_id):
     with get_db() as conn:
         row = conn.execute(
-            "SELECT id, username, password_hash, role, force_password_change FROM users WHERE id = ?",
+            "SELECT * FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
     return User.from_db(row)
+
+
+@app.before_request
+def update_user_activity():
+    if current_user.is_authenticated:
+        try:
+            now_str = datetime.datetime.now(tz=IST).strftime("%Y-%m-%d %H:%M:%S")
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE users SET last_active_at = ? WHERE id = ?",
+                    (now_str, current_user.id),
+                )
+                conn.commit()
+        except Exception:
+            pass
 
 
 @app.context_processor
@@ -1547,16 +1630,25 @@ def inject_user_preferences():
                     "SELECT theme, sidebar_style FROM user_preferences WHERE user_id = ?",
                     (current_user.id,),
                 ).fetchone()
-                if pref:
-                    return {
-                        "current_user_theme": pref["theme"] or "light",
-                        "current_user_sidebar_style": pref["sidebar_style"] or "default",
-                    }
+                user_row = conn.execute(
+                    "SELECT profile_pic, last_active_at FROM users WHERE id = ?",
+                    (current_user.id,),
+                ).fetchone()
+                pic = user_row["profile_pic"] if (user_row and user_row["profile_pic"]) else None
+                last_act = user_row["last_active_at"] if user_row else None
+                return {
+                    "current_user_theme": pref["theme"] if (pref and pref["theme"]) else "light",
+                    "current_user_sidebar_style": pref["sidebar_style"] if (pref and pref["sidebar_style"]) else "default",
+                    "current_user_profile_pic": pic,
+                    "current_user_is_online": is_user_online(last_act),
+                }
         except Exception:  # noqa: BLE001, S110
             pass
     return {
         "current_user_theme": "light",
         "current_user_sidebar_style": "default",
+        "current_user_profile_pic": None,
+        "current_user_is_online": False,
     }
 
 
@@ -4032,6 +4124,12 @@ def punch_out():
 @app.route("/logout")
 @login_required
 def logout():
+    try:
+        with get_db() as conn:
+            conn.execute("UPDATE users SET last_active_at = NULL WHERE id = ?", (current_user.id,))
+            conn.commit()
+    except Exception:
+        pass
     logout_user()
     flash("You have been logged out.", "info")
     return redirect(url_for("index"))
@@ -7908,7 +8006,7 @@ def employee_performance_profile(user_id):
 
     with get_db() as conn:
         emp_user = conn.execute(
-            "SELECT id, username, role, full_name, email FROM users WHERE id = ?",
+            "SELECT id, username, role, full_name, email, profile_pic, last_active_at FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
 
@@ -7940,12 +8038,14 @@ def employee_performance_profile(user_id):
             avg_overall = avg_tech = avg_comm = avg_prod = avg_team = 0.0
 
         perf = calculate_employee_performance(conn, user_id)
+        emp_user_online = is_user_online(emp_user["last_active_at"])
 
     return render_template_string(
         """
         {% extends "base.html" %}
         {% block title %}Performance Profile - {{ emp.full_name or emp.username }}{% endblock %}
         {% block page_content %}
+        <style>.status-indicator { position: absolute; border-radius: 50%; } .online { background-color: #22c55e; } .offline { background-color: #94a3b8; }</style>
         <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
             <div>
                 <h1>Performance Profile</h1>
@@ -7970,7 +8070,6 @@ def employee_performance_profile(user_id):
             {% endif %}
         {% endwith %}
 
-        <!-- Automated HRMS Performance Score Section -->
         <div class="card shadow-sm mb-4 border-0 border-start border-primary border-4">
             <div class="card-header bg-white py-3 border-0 d-flex flex-wrap justify-content-between align-items-center gap-2">
                 <h5 class="card-title fw-bold mb-0 text-dark">
@@ -8031,10 +8130,10 @@ def employee_performance_profile(user_id):
                                     <span class="fw-bold text-warning text-dark">{{ perf.pending_tasks }}</span>
                                 </div>
                             </div>
-                            <div class="col-12 col-md-4">
+                            <div class="col-6 col-md-4">
                                 <div class="p-2 border rounded d-flex justify-content-between align-items-center bg-white">
-                                    <span class="small text-muted fw-semibold">Total Assigned:</span>
-                                    <span class="fw-bold text-dark">{{ perf.total_tasks }}</span>
+                                    <span class="small text-muted fw-semibold">Total Assigned Tasks:</span>
+                                    <span class="fw-bold text-primary">{{ perf.total_tasks }}</span>
                                 </div>
                             </div>
                         </div>
@@ -8047,8 +8146,13 @@ def employee_performance_profile(user_id):
             <div class="card-body py-4">
                 <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
                     <div class="d-flex align-items-center gap-3">
-                        <div class="user-avatar fs-3 flex-shrink-0" style="width:72px; height:72px; background: #e0e7ff; color: #4338ca; display: flex; align-items: center; justify-content: center; border-radius: 50%;">
-                            {{ (emp.full_name or emp.username)[:2]|upper }}
+                        <div class="user-avatar fs-3 flex-shrink-0" style="width:72px; height:72px; background: #e0e7ff; color: #4338ca; display: flex; align-items: center; justify-content: center; border-radius: 50%; position: relative;">
+                            {% if emp.profile_pic %}
+                                <img src="{{ url_for('static', filename=emp.profile_pic) }}" alt="Avatar" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;">
+                            {% else %}
+                                {{ (emp.full_name or emp.username)[:2]|upper }}
+                            {% endif %}
+                            <span class="status-indicator {% if emp_user_online %}online{% else %}offline{% endif %}" style="width: 14px; height: 14px; border: 2px solid #fff; bottom: 2px; right: 2px;" title="{% if emp_user_online %}Online{% else %}Offline{% endif %}"></span>
                         </div>
                         <div>
                             <h4 class="h5 mb-1 fw-bold">{{ emp.full_name or emp.username }}</h4>
@@ -8082,37 +8186,32 @@ def employee_performance_profile(user_id):
                             </tr>
                         </thead>
                         <tbody>
-                            {% for rev in reviews %}
-                                <tr>
-                                    <td class="fw-bold text-dark">{{ rev.review_period }}</td>
-                                    <td><span class="badge bg-success fs-6">{{ '%.1f'|format(rev.overall_rating) }} ★</span></td>
-                                    <td class="small">
-                                        <span class="d-block text-muted">Tech: <strong class="text-dark">{{ rev.technical_skills_score }}</strong></span>
-                                        <span class="d-block text-muted">Comm: <strong class="text-dark">{{ rev.communication_score }}</strong></span>
-                                        <span class="d-block text-muted">Prod: <strong class="text-dark">{{ rev.productivity_score }}</strong></span>
-                                        <span class="d-block text-muted">Team: <strong class="text-dark">{{ rev.teamwork_score }}</strong></span>
-                                    </td>
-                                    <td style="max-width: 320px;">
-                                        {% if rev.strengths %}
-                                            <div class="small text-success mb-1"><strong><i class="bi bi-hand-thumbs-up me-1"></i>Strengths:</strong> {{ rev.strengths }}</div>
-                                        {% endif %}
-                                        {% if rev.areas_for_improvement %}
-                                            <div class="small text-danger mb-1"><strong><i class="bi bi-arrow-up-circle me-1"></i>Needs Work:</strong> {{ rev.areas_for_improvement }}</div>
-                                        {% endif %}
-                                        {% if rev.comments %}
-                                            <div class="small text-muted"><strong>Comments:</strong> {{ rev.comments }}</div>
-                                        {% endif %}
-                                    </td>
-                                    <td class="small fw-semibold"><i class="bi bi-person-check me-1 text-primary"></i>{{ rev.reviewer_username }}</td>
-                                    <td class="small text-muted">{{ rev.created_at }}</td>
-                                </tr>
+                            {% for r in reviews %}
+                            <tr>
+                                <td><span class="fw-bold">{{ r.review_period }}</span></td>
+                                <td>
+                                    <span class="badge bg-primary fs-6 px-2 py-1">{{ r.overall_rating }}.0 ★</span>
+                                </td>
+                                <td>
+                                    <div class="small">
+                                        <div>Technical: <strong>{{ r.technical_skills_score }}/5</strong></div>
+                                        <div>Communication: <strong>{{ r.communication_score }}/5</strong></div>
+                                        <div>Productivity: <strong>{{ r.productivity_score }}/5</strong></div>
+                                        <div>Teamwork: <strong>{{ r.teamwork_score }}/5</strong></div>
+                                    </div>
+                                </td>
+                                <td>
+                                    {% if r.strengths %}<div class="small text-success"><strong>Strengths:</strong> {{ r.strengths }}</div>{% endif %}
+                                    {% if r.areas_for_improvement %}<div class="small text-danger mt-1"><strong>Improvement:</strong> {{ r.areas_for_improvement }}</div>{% endif %}
+                                    {% if r.comments %}<div class="small text-muted mt-1"><em>"{{ r.comments }}"</em></div>{% endif %}
+                                </td>
+                                <td><span class="badge bg-light text-dark border">@{{ r.reviewer_username }}</span></td>
+                                <td class="small text-muted">{{ r.created_at }}</td>
+                            </tr>
                             {% else %}
-                                <tr>
-                                    <td colspan="6" class="text-center py-4 text-muted">
-                                        <i class="bi bi-journal-x display-6 d-block mb-2"></i>
-                                        No performance reviews logged for this employee yet.
-                                    </td>
-                                </tr>
+                            <tr>
+                                <td colspan="6" class="text-center py-4 text-muted">No manager evaluation reviews recorded yet.</td>
+                            </tr>
                             {% endfor %}
                         </tbody>
                     </table>
@@ -8128,7 +8227,7 @@ def employee_performance_profile(user_id):
         avg_comm=avg_comm,
         avg_prod=avg_prod,
         avg_team=avg_team,
-        perf=perf,
+        emp_user_online=emp_user_online,
     )
 
 
@@ -9945,14 +10044,53 @@ def settings_overview():
 @login_required
 def settings_profile():
     if request.method == "POST":
+        action = request.form.get("action", "update_profile")
+        if action == "remove_picture":
+            with get_db() as conn:
+                user_rec = conn.execute("SELECT profile_pic FROM users WHERE id = ?", (current_user.id,)).fetchone()
+                if user_rec and user_rec["profile_pic"]:
+                    old_file_path = os.path.join(app.root_path, "static", user_rec["profile_pic"])
+                    if os.path.exists(old_file_path):
+                        try:
+                            os.remove(old_file_path)
+                        except Exception:
+                            pass
+                conn.execute("UPDATE users SET profile_pic = NULL WHERE id = ?", (current_user.id,))
+                conn.commit()
+            flash("Profile picture removed.", "success")
+            return redirect(url_for("settings_profile"))
+
         full_name = request.form.get("full_name", "").strip()
         email = request.form.get("email", "").strip()
+        pic_file = request.files.get("profile_pic_file")
+        rel_pic_path = None
+        if pic_file and pic_file.filename:
+            rel_pic_path, err_msg = process_and_save_profile_pic(pic_file, current_user.id)
+            if err_msg:
+                flash(err_msg, "danger")
+                return redirect(url_for("settings_profile"))
+
         with get_db() as conn:
-            conn.execute(
-                "UPDATE users SET full_name = ?, email = ? WHERE id = ?",
-                (full_name or None, email or None, current_user.id),
-            )
+            if rel_pic_path:
+                user_rec = conn.execute("SELECT profile_pic FROM users WHERE id = ?", (current_user.id,)).fetchone()
+                if user_rec and user_rec["profile_pic"]:
+                    old_file_path = os.path.join(app.root_path, "static", user_rec["profile_pic"])
+                    if os.path.exists(old_file_path):
+                        try:
+                            os.remove(old_file_path)
+                        except Exception:
+                            pass
+                conn.execute(
+                    "UPDATE users SET full_name = ?, email = ?, profile_pic = ? WHERE id = ?",
+                    (full_name or None, email or None, rel_pic_path, current_user.id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE users SET full_name = ?, email = ? WHERE id = ?",
+                    (full_name or None, email or None, current_user.id),
+                )
             conn.commit()
+
         notify_user_by_name_or_username(
             current_user.username,
             "Profile Updated",
@@ -9964,7 +10102,7 @@ def settings_profile():
 
     with get_db() as conn:
         u = conn.execute(
-            "SELECT id, username, full_name, email, role FROM users WHERE id = ?",
+            "SELECT id, username, full_name, email, role, profile_pic, last_active_at FROM users WHERE id = ?",
             (current_user.id,),
         ).fetchone()
 
@@ -9974,6 +10112,7 @@ def settings_profile():
         ).fetchone()
 
         payroll = calculate_employee_payroll(conn, emp_row["id"]) if emp_row else None
+        user_online = is_user_online(u["last_active_at"]) if u else False
 
     return render_template_string(
         """
@@ -9983,7 +10122,7 @@ def settings_profile():
         <div class="page-header d-flex justify-content-between align-items-center mb-4">
             <div>
                 <h1><i class="bi bi-person-gear me-2 text-primary"></i>Profile Settings</h1>
-                <p>Manage your account profile, personal info, and contact details.</p>
+                <p>Manage your account profile, personal info, contact details, and profile picture.</p>
             </div>
         </div>
 
@@ -10001,14 +10140,29 @@ def settings_profile():
         <div class="row g-4 mb-4">
             <div class="col-md-4">
                 <div class="card shadow-sm text-center p-4 h-100">
-                    <div class="mb-3">
-                        <div class="rounded-circle bg-primary bg-opacity-10 d-inline-flex align-items-center justify-content-center" style="width: 80px; height: 80px;">
-                            <i class="bi bi-person-fill fs-1 text-primary"></i>
+                    <div class="mb-3 position-relative d-inline-block mx-auto">
+                        <div class="user-avatar rounded-circle shadow-sm overflow-hidden d-inline-flex align-items-center justify-content-center border" style="width: 120px; height: 120px; background: #e0e7ff; color: #4338ca; position: relative;">
+                            {% if u.profile_pic %}
+                                <img id="avatarPreviewImg" src="{{ url_for('static', filename=u.profile_pic) }}" alt="Profile Picture" style="width: 100%; height: 100%; object-fit: cover;">
+                            {% else %}
+                                <img id="avatarPreviewImg" src="" alt="Preview" style="width: 100%; height: 100%; object-fit: cover; display: none;">
+                                <span id="avatarPlaceholder" class="fs-1 fw-bold">{{ (u.full_name or u.username)[:1]|upper }}</span>
+                            {% endif %}
+                            <span class="status-indicator {% if user_online %}online{% else %}offline{% endif %}" style="width: 16px; height: 16px; border: 3px solid #fff; bottom: 4px; right: 4px;" title="{% if user_online %}Online{% else %}Offline{% endif %}"></span>
                         </div>
                     </div>
                     <h5 class="fw-bold mb-1">{{ u.full_name or u.username }}</h5>
                     <p class="text-muted small mb-2">@{{ u.username }}</p>
                     <span class="badge bg-primary px-3 py-2 align-self-center text-uppercase">{{ u.role }}</span>
+                    
+                    {% if u.profile_pic %}
+                    <form method="POST" action="{{ url_for('settings_profile') }}" class="mt-3">
+                        <input type="hidden" name="action" value="remove_picture">
+                        <button type="submit" class="btn btn-sm btn-outline-danger w-100" onclick="return confirm('Are you sure you want to remove your profile picture?');">
+                            <i class="bi bi-trash me-1"></i>Remove Picture
+                        </button>
+                    </form>
+                    {% endif %}
                 </div>
             </div>
 
@@ -10018,7 +10172,13 @@ def settings_profile():
                         <h5 class="card-title mb-0 fw-bold"><i class="bi bi-pencil-square me-2 text-primary"></i>Edit Personal Information</h5>
                     </div>
                     <div class="card-body">
-                        <form method="POST" action="{{ url_for('settings_profile') }}">
+                        <form method="POST" action="{{ url_for('settings_profile') }}" enctype="multipart/form-data">
+                            <input type="hidden" name="action" value="update_profile">
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Profile Picture</label>
+                                <input type="file" class="form-control" name="profile_pic_file" id="profile_pic_file" accept=".jpg,.jpeg,.png,.webp" onchange="previewProfilePic(event)">
+                                <div class="form-text">Supported formats: JPG, JPEG, PNG, WEBP. Maximum file size: 2 MB. Image will automatically be resized to 256x256 pixels.</div>
+                            </div>
                             <div class="mb-3">
                                 <label class="form-label fw-semibold">Username</label>
                                 <input type="text" class="form-control bg-light" value="{{ u.username }}" readonly disabled>
@@ -10038,6 +10198,33 @@ def settings_profile():
                 </div>
             </div>
         </div>
+
+        <script>
+        function previewProfilePic(event) {
+            const input = event.target;
+            if (input.files && input.files[0]) {
+                const file = input.files[0];
+                if (file.size > 2 * 1024 * 1024) {
+                    alert('File size exceeds maximum limit of 2 MB. Please select a smaller file.');
+                    input.value = '';
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const img = document.getElementById('avatarPreviewImg');
+                    const placeholder = document.getElementById('avatarPlaceholder');
+                    if (img) {
+                        img.src = e.target.result;
+                        img.style.display = 'block';
+                    }
+                    if (placeholder) {
+                        placeholder.style.display = 'none';
+                    }
+                };
+                reader.readAsDataURL(file);
+            }
+        }
+        </script>
 
         {% if payroll %}
         <!-- Payroll Section -->
@@ -10100,6 +10287,7 @@ def settings_profile():
         """,
         u=u,
         payroll=payroll,
+        user_online=user_online,
     )
 
 
