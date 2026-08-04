@@ -33,7 +33,277 @@ import secrets  # noqa: I001
 import smtplib
 import sqlite3
 import traceback
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+def send_email(to_email, subject, html_content, text_content=None):
+    """Send an HTML email using SMTP configuration.
+
+    Catches all exceptions and logs them without interrupting application flow.
+    """
+    if not to_email:
+        print("DEBUG SMTP: No recipient email provided. Skipping email send.")
+        return False
+    if not MAIL_USERNAME or not MAIL_PASSWORD:
+        print("DEBUG SMTP: MAIL_USERNAME or MAIL_PASSWORD not configured. Skipping email send.")
+        return False
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = MAIL_DEFAULT_SENDER or EMAIL_ADDRESS or MAIL_USERNAME
+        msg["To"] = to_email
+
+        if text_content:
+            msg.attach(MIMEText(text_content, "plain"))
+        else:
+            import re
+            plain_text = re.sub(r'<[^>]+>', '', html_content)
+            msg.attach(MIMEText(plain_text, "plain"))
+
+        msg.attach(MIMEText(html_content, "html"))
+
+        print(f"DEBUG SMTP: Sending email to {to_email} via {MAIL_SERVER}:{MAIL_PORT}")
+        with smtplib.SMTP(MAIL_SERVER, MAIL_PORT, timeout=10) as server:
+            if MAIL_USE_TLS:
+                server.starttls()
+            server.login(MAIL_USERNAME, MAIL_PASSWORD)
+            server.send_message(msg)
+        print(f"DEBUG SMTP: Email successfully sent to {to_email}")
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"ERROR SMTP: Failed to send email to {to_email}: {e}")
+        traceback.print_exc()
+        return False
+
+
+def send_welcome_email(recipient_email, full_name, username, temporary_password):
+    """Send a welcome email with login info using Gmail SMTP.
+
+    Uses `EMAIL_ADDRESS` and `EMAIL_APP_PASSWORD` for authentication.
+    This function prints errors and does not raise on failure.
+    """
+    subject = "Welcome to the User Management System"
+    body = (
+        f"Hello {full_name},\n\n"
+        "Your account has been created successfully.\n\n"
+        f"Username: {username}\n"
+        f"Temporary Password: {temporary_password}\n\n"
+        "Login here:\nhttps://hrmsapp.pythonanywhere.com/login\n\n"
+        "Please change your password after logging in.\n"
+    )
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_ADDRESS
+    msg["To"] = recipient_email
+    try:
+        print(f"DEBUG SMTP: {MAIL_SERVER}:{MAIL_PORT}")
+        with smtplib.SMTP(MAIL_SERVER, MAIL_PORT, timeout=10) as server:
+            server.starttls()
+            server.login(MAIL_USERNAME, MAIL_PASSWORD)
+            server.send_message(msg)
+        print("DEBUG: Welcome email sent successfully")
+    except Exception:  # noqa: BLE001  # Email send fallback error handling
+        traceback.print_exc()
+
+
+def send_leave_submission_email_to_admin(req_details):
+    """Send email notification to admin(s) when an employee submits a leave request."""
+    try:
+        with get_db() as conn:
+            admins = conn.execute(
+                "SELECT email FROM users WHERE role = 'admin' AND email IS NOT NULL AND email != ''"
+            ).fetchall()
+
+        admin_emails = list({a["email"].strip() for a in admins if a["email"] and a["email"].strip()})
+        if not admin_emails and MAIL_USERNAME:
+            admin_emails = [MAIL_USERNAME]
+
+        if not admin_emails:
+            print("DEBUG SMTP: No admin email found for leave submission notification.")
+            return
+
+        subject = f"New Leave Request - {req_details.get('employee_name', 'Employee')}"
+        emp_name = req_details.get("employee_name", "N/A")
+        emp_id = req_details.get("employee_id", "N/A")
+        leave_type = req_details.get("leave_type", "N/A")
+        start_date = req_details.get("start_date", "N/A")
+        end_date = req_details.get("end_date", "N/A")
+        total_days = req_details.get("total_days", "N/A")
+        reason = req_details.get("reason", "N/A")
+        submission_time = req_details.get("applied_date", "N/A")
+
+        html_body = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <style>
+            body {{ font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc; color: #1e293b; margin: 0; padding: 20px; }}
+            .container {{ max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }}
+            .header {{ background-color: #4f46e5; color: #ffffff; padding: 20px 24px; font-size: 18px; font-weight: 600; }}
+            .content {{ padding: 24px; font-size: 14px; line-height: 1.6; }}
+            .table-details {{ width: 100%; border-collapse: collapse; margin-top: 16px; margin-bottom: 16px; }}
+            .table-details td {{ padding: 10px 12px; border-bottom: 1px solid #f1f5f9; }}
+            .table-details td.label {{ font-weight: 600; color: #64748b; width: 35%; background-color: #f8fafc; }}
+            .table-details td.value {{ color: #0f172a; font-weight: 500; }}
+            .footer {{ background-color: #f8fafc; padding: 16px 24px; font-size: 12px; color: #64748b; text-align: center; border-top: 1px solid #e2e8f0; }}
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">📋 New Leave Request Submitted</div>
+            <div class="content">
+              <p>A new leave request has been submitted and is pending review:</p>
+              <table class="table-details">
+                <tr><td class="label">Employee Name</td><td class="value">{emp_name}</td></tr>
+                <tr><td class="label">Employee ID</td><td class="value">{emp_id}</td></tr>
+                <tr><td class="label">Leave Type</td><td class="value">{leave_type}</td></tr>
+                <tr><td class="label">Start Date</td><td class="value">{start_date}</td></tr>
+                <tr><td class="label">End Date</td><td class="value">{end_date}</td></tr>
+                <tr><td class="label">Total Duration</td><td class="value">{total_days} day(s)</td></tr>
+                <tr><td class="label">Reason</td><td class="value">{reason}</td></tr>
+                <tr><td class="label">Submitted At</td><td class="value">{submission_time}</td></tr>
+              </table>
+              <p>Please log in to the HRMS portal to review and approve or reject this request.</p>
+            </div>
+            <div class="footer">HRMS Notification System &bull; Automated Email</div>
+          </div>
+        </body>
+        </html>
+        """
+
+        for admin_email in admin_emails:
+            send_email(admin_email, subject, html_body)
+    except Exception as e:  # noqa: BLE001
+        print(f"ERROR: Exception in send_leave_submission_email_to_admin: {e}")
+        traceback.print_exc()
+
+
+def send_leave_approval_email_to_employee(user_id, req_details, comments=""):
+    """Send email notification to employee when leave is approved."""
+    try:
+        with get_db() as conn:
+            user = conn.execute("SELECT email, username, full_name FROM users WHERE id = ?", (user_id,)).fetchone()
+
+        if not user or not user["email"]:
+            print(f"DEBUG SMTP: No email found for user_id={user_id}. Skipping approval email.")
+            return
+
+        recipient_email = user["email"].strip()
+        emp_name = user["full_name"] or user["username"] or "Employee"
+        subject = "Leave Request Approved"
+        leave_type = req_details.get("leave_type", "Leave")
+        start_date = req_details.get("start_date", "")
+        end_date = req_details.get("end_date", "")
+        approved_dates = f"{start_date} to {end_date}" if start_date and end_date else "N/A"
+        comments_str = comments if comments else "None"
+
+        html_body = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <style>
+            body {{ font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc; color: #1e293b; margin: 0; padding: 20px; }}
+            .container {{ max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }}
+            .header {{ background-color: #10b981; color: #ffffff; padding: 20px 24px; font-size: 18px; font-weight: 600; }}
+            .content {{ padding: 24px; font-size: 14px; line-height: 1.6; }}
+            .table-details {{ width: 100%; border-collapse: collapse; margin-top: 16px; margin-bottom: 16px; }}
+            .table-details td {{ padding: 10px 12px; border-bottom: 1px solid #f1f5f9; }}
+            .table-details td.label {{ font-weight: 600; color: #64748b; width: 35%; background-color: #f8fafc; }}
+            .table-details td.value {{ color: #0f172a; font-weight: 500; }}
+            .footer {{ background-color: #f8fafc; padding: 16px 24px; font-size: 12px; color: #64748b; text-align: center; border-top: 1px solid #e2e8f0; }}
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">✅ Leave Request Approved</div>
+            <div class="content">
+              <p>Hello <strong>{emp_name}</strong>,</p>
+              <p>Your leave request has been <strong>APPROVED</strong> by the administration.</p>
+              <table class="table-details">
+                <tr><td class="label">Leave Type</td><td class="value">{leave_type}</td></tr>
+                <tr><td class="label">Approved Dates</td><td class="value">{approved_dates}</td></tr>
+                <tr><td class="label">Admin Comments</td><td class="value">{comments_str}</td></tr>
+              </table>
+              <p>Enjoy your leave!</p>
+            </div>
+            <div class="footer">HRMS Notification System &bull; Automated Email</div>
+          </div>
+        </body>
+        </html>
+        """
+
+        send_email(recipient_email, subject, html_body)
+    except Exception as e:  # noqa: BLE001
+        print(f"ERROR: Exception in send_leave_approval_email_to_employee: {e}")
+        traceback.print_exc()
+
+
+def send_leave_rejection_email_to_employee(user_id, req_details, rejection_reason="", comments=""):
+    """Send email notification to employee when leave is rejected."""
+    try:
+        with get_db() as conn:
+            user = conn.execute("SELECT email, username, full_name FROM users WHERE id = ?", (user_id,)).fetchone()
+
+        if not user or not user["email"]:
+            print(f"DEBUG SMTP: No email found for user_id={user_id}. Skipping rejection email.")
+            return
+
+        recipient_email = user["email"].strip()
+        emp_name = user["full_name"] or user["username"] or "Employee"
+        subject = "Leave Request Rejected"
+        leave_type = req_details.get("leave_type", "Leave")
+        start_date = req_details.get("start_date", "")
+        end_date = req_details.get("end_date", "")
+        requested_dates = f"{start_date} to {end_date}" if start_date and end_date else "N/A"
+
+        reason_display = rejection_reason if rejection_reason else "N/A"
+        if comments:
+            reason_display += f" ({comments})"
+
+        html_body = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <style>
+            body {{ font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc; color: #1e293b; margin: 0; padding: 20px; }}
+            .container {{ max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }}
+            .header {{ background-color: #ef4444; color: #ffffff; padding: 20px 24px; font-size: 18px; font-weight: 600; }}
+            .content {{ padding: 24px; font-size: 14px; line-height: 1.6; }}
+            .table-details {{ width: 100%; border-collapse: collapse; margin-top: 16px; margin-bottom: 16px; }}
+            .table-details td {{ padding: 10px 12px; border-bottom: 1px solid #f1f5f9; }}
+            .table-details td.label {{ font-weight: 600; color: #64748b; width: 35%; background-color: #f8fafc; }}
+            .table-details td.value {{ color: #0f172a; font-weight: 500; }}
+            .footer {{ background-color: #f8fafc; padding: 16px 24px; font-size: 12px; color: #64748b; text-align: center; border-top: 1px solid #e2e8f0; }}
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">❌ Leave Request Rejected</div>
+            <div class="content">
+              <p>Hello <strong>{emp_name}</strong>,</p>
+              <p>Your leave request has been <strong>REJECTED</strong> by the administration.</p>
+              <table class="table-details">
+                <tr><td class="label">Leave Type</td><td class="value">{leave_type}</td></tr>
+                <tr><td class="label">Requested Dates</td><td class="value">{requested_dates}</td></tr>
+                <tr><td class="label">Reason / Comments</td><td class="value">{reason_display}</td></tr>
+              </table>
+              <p>Please contact HR/Management if you have any questions.</p>
+            </div>
+            <div class="footer">HRMS Notification System &bull; Automated Email</div>
+          </div>
+        </body>
+        </html>
+        """
+
+        send_email(recipient_email, subject, html_body)
+    except Exception as e:  # noqa: BLE001
+        print(f"ERROR: Exception in send_leave_rejection_email_to_employee: {e}")
+        traceback.print_exc()
+
 
 from flask import (
     Flask,
@@ -5964,6 +6234,8 @@ def apply_leave():
             employee_name = get_employee_name_for_user(
                 conn, current_user.id, current_user.username
             )
+            emp = conn.execute("SELECT id FROM employees WHERE user_id = ?", (current_user.id,)).fetchone()
+            emp_id = f"EMP-{emp['id']}" if emp and emp["id"] else "N/A"
             applied_date = datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
 
             cursor = conn.execute(
@@ -5992,6 +6264,20 @@ def apply_leave():
             f"{employee_name} applied for {total_days} day(s) of {leave_type}.",
             url_for("pending_leave_requests"),
         )
+        try:
+            send_leave_submission_email_to_admin({
+                "employee_name": employee_name,
+                "employee_id": emp_id,
+                "leave_type": leave_type,
+                "start_date": start_date_str,
+                "end_date": end_date_str,
+                "total_days": total_days,
+                "reason": reason,
+                "applied_date": applied_date,
+            })
+        except Exception as e:
+            print("Failed to trigger admin leave submission email:", e)
+
         msg = "Leave request submitted successfully."
         flash(msg, "success")
         if request.is_json:
@@ -6622,6 +6908,15 @@ def approve_leave(leave_id):
         f"Your {req['leave_type']} request ({req['start_date']} to {req['end_date']}) has been approved.",
         url_for("my_leave_requests"),
     )
+    try:
+        send_leave_approval_email_to_employee(
+            req["user_id"],
+            dict(req),
+            comments=comments,
+        )
+    except Exception as e:
+        print("Failed to trigger leave approval email:", e)
+
     msg = "Leave request approved successfully."
     flash(msg, "success")
     if request.is_json:
@@ -6703,6 +6998,16 @@ def reject_leave(leave_id):
         f"Your {req['leave_type']} request ({req['start_date']} to {req['end_date']}) was rejected.",
         url_for("my_leave_requests"),
     )
+    try:
+        send_leave_rejection_email_to_employee(
+            req["user_id"],
+            dict(req),
+            rejection_reason=rejection_reason,
+            comments=comments,
+        )
+    except Exception as e:
+        print("Failed to trigger leave rejection email:", e)
+
     msg = "Leave request rejected successfully."
     flash(msg, "success")
     if request.is_json:
