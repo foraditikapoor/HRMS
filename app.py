@@ -185,13 +185,27 @@ def send_leave_approval_email_to_employee(user_id, req_details, comments=""):
     try:
         with get_db() as conn:
             user = conn.execute("SELECT email, username, full_name FROM users WHERE id = ?", (user_id,)).fetchone()
+            emp = conn.execute("SELECT name FROM employees WHERE user_id = ?", (user_id,)).fetchone()
 
         if not user or not user["email"]:
             print(f"DEBUG SMTP: No email found for user_id={user_id}. Skipping approval email.")
             return
 
         recipient_email = user["email"].strip()
-        emp_name = user["full_name"] or user["username"] or "Employee"
+
+        # Database greeting logic:
+        # If Full Name exists (users.full_name or employees.name), use "Dear <Full Name>,"
+        # Else use "Dear <Username>,"
+        full_name = (user["full_name"].strip() if user["full_name"] and user["full_name"].strip() else None)
+        if not full_name and emp and emp["name"] and emp["name"].strip():
+            full_name = emp["name"].strip()
+
+        if full_name:
+            greeting = f"Dear {full_name},"
+        else:
+            username = user["username"].strip() if user["username"] else "Employee"
+            greeting = f"Dear {username},"
+
         subject = "Leave Request Approved"
         leave_type = req_details.get("leave_type", "Leave")
         start_date = req_details.get("start_date", "")
@@ -220,7 +234,7 @@ def send_leave_approval_email_to_employee(user_id, req_details, comments=""):
           <div class="container">
             <div class="header">✅ Leave Request Approved</div>
             <div class="content">
-              <p>Hello <strong>{emp_name}</strong>,</p>
+              <p>{greeting}</p>
               <p>Your leave request has been <strong>APPROVED</strong> by the administration.</p>
               <table class="table-details">
                 <tr><td class="label">Leave Type</td><td class="value">{leave_type}</td></tr>
@@ -246,13 +260,27 @@ def send_leave_rejection_email_to_employee(user_id, req_details, rejection_reaso
     try:
         with get_db() as conn:
             user = conn.execute("SELECT email, username, full_name FROM users WHERE id = ?", (user_id,)).fetchone()
+            emp = conn.execute("SELECT name FROM employees WHERE user_id = ?", (user_id,)).fetchone()
 
         if not user or not user["email"]:
             print(f"DEBUG SMTP: No email found for user_id={user_id}. Skipping rejection email.")
             return
 
         recipient_email = user["email"].strip()
-        emp_name = user["full_name"] or user["username"] or "Employee"
+
+        # Database greeting logic:
+        # If Full Name exists (users.full_name or employees.name), use "Dear <Full Name>,"
+        # Else use "Dear <Username>,"
+        full_name = (user["full_name"].strip() if user["full_name"] and user["full_name"].strip() else None)
+        if not full_name and emp and emp["name"] and emp["name"].strip():
+            full_name = emp["name"].strip()
+
+        if full_name:
+            greeting = f"Dear {full_name},"
+        else:
+            username = user["username"].strip() if user["username"] else "Employee"
+            greeting = f"Dear {username},"
+
         subject = "Leave Request Rejected"
         leave_type = req_details.get("leave_type", "Leave")
         start_date = req_details.get("start_date", "")
@@ -284,7 +312,7 @@ def send_leave_rejection_email_to_employee(user_id, req_details, rejection_reaso
           <div class="container">
             <div class="header">❌ Leave Request Rejected</div>
             <div class="content">
-              <p>Hello <strong>{emp_name}</strong>,</p>
+              <p>{greeting}</p>
               <p>Your leave request has been <strong>REJECTED</strong> by the administration.</p>
               <table class="table-details">
                 <tr><td class="label">Leave Type</td><td class="value">{leave_type}</td></tr>
