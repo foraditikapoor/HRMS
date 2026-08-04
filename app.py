@@ -28,7 +28,8 @@ except Exception:  # noqa: BLE001  # Fallback manual env loader on import error
             print("DEBUG: failed to load .env manually:", e)
     else:
         print(f"DEBUG: no .env found at {dotenv_path}")
-import calendar
+import calendar  # noqa: I001
+import json
 import secrets
 import smtplib
 import sqlite3
@@ -1031,6 +1032,37 @@ def ensure_settings_tables():
         conn.commit()
 
 
+def ensure_payroll_table():
+    """Create payroll_records table if it does not exist to store finalized payroll history."""
+    with get_db() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS payroll_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                employee_id INTEGER NOT NULL,
+                user_id INTEGER,
+                month_year TEXT NOT NULL,
+                base_salary REAL NOT NULL,
+                working_days INTEGER NOT NULL,
+                present_days INTEGER NOT NULL,
+                attendance_pct REAL NOT NULL,
+                approved_leave_days REAL NOT NULL,
+                unpaid_leave_days REAL NOT NULL,
+                performance_score REAL DEFAULT 0.0,
+                leave_deduction REAL NOT NULL,
+                adjustments REAL DEFAULT 0.0,
+                final_salary REAL NOT NULL,
+                status TEXT DEFAULT 'Calculated',
+                salary_breakdown TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE,
+                UNIQUE(employee_id, month_year)
+            )
+            """
+        )
+        conn.commit()
+
+
 @app.template_filter("inr")
 def format_inr(amount):
     """Format numeric salary/currency amounts into Indian Rupee (INR / ₹) standard format."""
@@ -1262,6 +1294,188 @@ def calculate_employee_performance(conn, user_id):
             conn.close()
 
 
+def calculate_employee_payroll(conn, emp_id, year=None, month=None):
+    """Calculates payroll for an employee for the given month/year automatically.
+
+    Reuses existing Attendance, Leave, Performance and Employee data.
+    If a finalized payroll record exists in payroll_records, returns the frozen record.
+    Otherwise, dynamically calculates payroll values using current Base Salary and real-time attendance/leave.
+    """
+    now = datetime.datetime.now(tz=IST)
+    if year is None:
+        year = now.year
+    if month is None:
+        month = now.month
+
+    close_conn = False
+    if conn is None:
+        conn = get_db()
+        close_conn = True
+
+    try:
+        month_year_str = f"{year:04d}-{month:02d}"
+
+        emp = conn.execute("SELECT * FROM employees WHERE id = ?", (emp_id,)).fetchone()
+        if not emp:
+            return None
+
+        user_id = dict(emp).get("user_id") or None
+        if not user_id and emp["name"]:
+            u = conn.execute(
+                "SELECT id FROM users WHERE full_name = ? OR username = ?",
+                (emp["name"], emp["name"]),
+            ).fetchone()
+            if u:
+                user_id = u["id"]
+
+        # 1. Check if a finalized payroll record exists
+        payroll_rec = conn.execute(
+            "SELECT * FROM payroll_records WHERE employee_id = ? AND month_year = ? AND status IN ('Finalized', 'Paid')",
+            (emp_id, month_year_str),
+        ).fetchone()
+
+        if payroll_rec:
+            month_date = datetime.date(year, month, 1)
+            month_name = month_date.strftime("%B %Y")
+            breakdown = {}
+            if payroll_rec["salary_breakdown"]:
+                try:
+                    breakdown = json.loads(payroll_rec["salary_breakdown"])
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    breakdown = {}
+
+            base_sal = float(payroll_rec["base_salary"])
+            work_days = int(payroll_rec["working_days"])
+            per_day = round(base_sal / work_days, 2) if work_days > 0 else 0.0
+
+            return {
+                "emp_id": emp["id"],
+                "user_id": user_id,
+                "name": emp["name"],
+                "department": emp["department"] or "N/A",
+                "month_year": month_year_str,
+                "payroll_month": month_name,
+                "base_salary": base_sal,
+                "working_days": work_days,
+                "present_days": int(payroll_rec["present_days"]),
+                "attendance_pct": float(payroll_rec["attendance_pct"]),
+                "approved_leave_days": float(payroll_rec["approved_leave_days"]),
+                "unpaid_leave_days": float(payroll_rec["unpaid_leave_days"]),
+                "performance_score": float(payroll_rec["performance_score"]),
+                "per_day_salary": per_day,
+                "leave_deduction": float(payroll_rec["leave_deduction"]),
+                "adjustments": float(payroll_rec["adjustments"]),
+                "final_salary": float(payroll_rec["final_salary"]),
+                "payroll_status": payroll_rec["status"],
+                "salary_breakdown": breakdown,
+                "is_finalized": True,
+            }
+
+        # 2. Dynamic Calculation using current Base Salary
+        base_salary = float(emp["salary"] or 0.0)
+
+        num_days = calendar.monthrange(year, month)[1]
+        start_date_str = f"{year:04d}-{month:02d}-01"
+        end_date_str = f"{year:04d}-{month:02d}-{num_days:02d}"
+
+        # Exclude weekends and existing HRMS holidays from working days
+        holiday_rows = conn.execute(
+            "SELECT date FROM holidays WHERE date >= ? AND date <= ?",
+            (start_date_str, end_date_str),
+        ).fetchall()
+        holiday_dates = {h["date"] for h in holiday_rows}
+
+        working_days = 0
+        for d in range(1, num_days + 1):
+            d_obj = datetime.date(year, month, d)
+            if d_obj.weekday() not in (5, 6) and d_obj.isoformat() not in holiday_dates:
+                working_days += 1
+
+        # Attendance & Present days calculation using existing helper
+        present_days = 0
+        attendance_pct = 100.0
+        if user_id:
+            cal_data = get_monthly_attendance_calendar_data(year, month, user_id)
+            stats = cal_data.get("stats", {}) if cal_data else {}
+            present_days = int(stats.get("present_count", 0))
+            tot_workdays = present_days + int(stats.get("absent_count", 0))
+            if tot_workdays > 0:
+                attendance_pct = float(stats.get("attendance_rate", 100.0))
+
+        # Approved Leave Days & Unpaid Leave Days calculation
+        approved_leave_days = 0.0
+        unpaid_leave_days = 0.0
+        if user_id:
+            leave_rows = conn.execute(
+                """
+                SELECT leave_type, start_date, end_date, total_days 
+                FROM leave_requests 
+                WHERE user_id = ? AND status = 'Approved' 
+                  AND start_date <= ? AND end_date >= ?
+                """,
+                (user_id, end_date_str, start_date_str),
+            ).fetchall()
+
+            for d in range(1, num_days + 1):
+                d_str = datetime.date(year, month, d).isoformat()
+                for l in leave_rows:
+                    if l["start_date"] <= d_str <= l["end_date"]:
+                        approved_leave_days += 1.0
+                        l_type = (l["leave_type"] or "").lower().strip()
+                        if "unpaid" in l_type or "loss of pay" in l_type or l_type == "lop":
+                            unpaid_leave_days += 1.0
+                        break
+
+        per_day_salary = (base_salary / working_days) if working_days > 0 else 0.0
+        leave_deduction = round(per_day_salary * unpaid_leave_days, 2)
+        adjustments = 0.0
+        final_salary = round(max(0.0, base_salary - leave_deduction + adjustments), 2)
+
+        performance_score = 0.0
+        if user_id:
+            perf = calculate_employee_performance(conn, user_id)
+            performance_score = float(perf.get("performance_score", 0.0))
+
+        month_date = datetime.date(year, month, 1)
+        month_name = month_date.strftime("%B %Y")
+
+        breakdown = {
+            "base_salary": base_salary,
+            "working_days": working_days,
+            "per_day_salary": round(per_day_salary, 2),
+            "unpaid_leave_days": unpaid_leave_days,
+            "leave_deduction": leave_deduction,
+            "adjustments": adjustments,
+            "final_salary": final_salary,
+        }
+
+        return {
+            "emp_id": emp["id"],
+            "user_id": user_id,
+            "name": emp["name"],
+            "department": emp["department"] or "N/A",
+            "month_year": month_year_str,
+            "payroll_month": month_name,
+            "base_salary": base_salary,
+            "working_days": working_days,
+            "present_days": present_days,
+            "attendance_pct": round(attendance_pct, 1),
+            "approved_leave_days": approved_leave_days,
+            "unpaid_leave_days": unpaid_leave_days,
+            "performance_score": round(performance_score, 1),
+            "per_day_salary": round(per_day_salary, 2),
+            "leave_deduction": leave_deduction,
+            "adjustments": adjustments,
+            "final_salary": final_salary,
+            "payroll_status": "Auto-Calculated",
+            "salary_breakdown": breakdown,
+            "is_finalized": False,
+        }
+    finally:
+        if close_conn:
+            conn.close()
+
+
 def init_db():
     with get_db() as conn:
         conn.execute(
@@ -1288,6 +1502,7 @@ def init_db():
         ensure_performance_reviews_table()
         ensure_notifications_table()
         ensure_settings_tables()
+        ensure_payroll_table()
 
         admin_exists = conn.execute(
             "SELECT COUNT(*) FROM users WHERE username = ?",
@@ -5165,7 +5380,7 @@ def view_employee(emp_id):
             flash("Employee not found.", "warning")
             return redirect(url_for("admin_employees"))
 
-        user_id = r["user_id"] if ("user_id" in r and r["user_id"]) else None
+        user_id = dict(r).get("user_id") or None
         if not user_id and r["name"]:
             u = conn.execute(
                 "SELECT id FROM users WHERE full_name = ? OR username = ?",
@@ -5175,6 +5390,7 @@ def view_employee(emp_id):
                 user_id = u["id"]
 
         perf = calculate_employee_performance(conn, user_id)
+        payroll = calculate_employee_payroll(conn, emp_id)
 
     return render_template_string(
         """
@@ -5189,6 +5405,17 @@ def view_employee(emp_id):
             </head>
             <body class="bg-light">
                 <div class="container py-5">
+                    {% with messages = get_flashed_messages(with_categories=true) %}
+                        {% if messages %}
+                            {% for category, message in messages %}
+                                <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                                    {{ message }}
+                                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                                </div>
+                            {% endfor %}
+                        {% endif %}
+                    {% endwith %}
+
                     <div class="card shadow-sm mx-auto mb-4" style="max-width: 800px;">
                         <div class="card-body">
                             <div class="d-flex align-items-center mb-3">
@@ -5201,12 +5428,74 @@ def view_employee(emp_id):
                             <p><strong>Experience:</strong> {{ r.experience or 'N/A' }}</p>
                             <p><strong>Contact Number:</strong> {{ r.contact_number or '' }}</p>
                             <p><strong>Emergency Contact:</strong> {{ r.emergency_contact or 'N/A' }}</p>
-                            <p><strong>Salary:</strong> {{ r.salary | inr if r.salary else 'N/A' }}</p>
+                            <p><strong>Base Salary:</strong> {{ r.salary | inr if r.salary else 'N/A' }}</p>
                             <p><strong>PAN:</strong> {% if r.pan_path %}<a href="/{{ r.pan_path }}">Download</a>{% else %}N/A{% endif %}</p>
                             <p><strong>Aadhaar:</strong> {% if r.aadhaar_path %}<a href="/{{ r.aadhaar_path }}">Download</a>{% else %}N/A{% endif %}</p>
                             <p><strong>Other Docs:</strong> {% if r.other_docs_path %}<a href="/{{ r.other_docs_path }}">Download</a>{% else %}N/A{% endif %}</p>
                             
                             <hr class="my-4">
+
+                            <!-- Payroll Section -->
+                            {% if payroll %}
+                            <div class="p-3 bg-light rounded border mb-4">
+                                <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+                                    <h5 class="mb-0 fw-bold text-dark"><i class="bi bi-wallet2 me-2 text-success"></i>Payroll Section</h5>
+                                    <span class="badge bg-success px-3 py-1 fs-6">{{ payroll.payroll_month }}</span>
+                                </div>
+                                <div class="row g-3 mb-3">
+                                    <div class="col-md-4">
+                                        <div class="p-3 bg-white rounded border text-center h-100">
+                                            <span class="text-muted small d-block mb-1">Current Base Salary</span>
+                                            <strong class="fs-5 text-dark">{{ payroll.base_salary | inr }}</strong>
+                                            {% if current_user.role == 'admin' %}
+                                                <form method="POST" action="{{ url_for('update_employee_base_salary', emp_id=r.id) }}" class="mt-2 d-flex gap-1 justify-content-center">
+                                                    <input type="number" step="0.01" name="salary" class="form-control form-control-sm" style="max-width: 110px;" value="{{ payroll.base_salary }}" required>
+                                                    <button type="submit" class="btn btn-sm btn-outline-primary" title="Update Base Salary"><i class="bi bi-check-lg"></i></button>
+                                                </form>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="p-3 bg-white rounded border text-center h-100">
+                                            <span class="text-muted small d-block mb-1">Current Month Final Salary</span>
+                                            <strong class="fs-4 text-success">{{ payroll.final_salary | inr }}</strong>
+                                            {% if payroll.leave_deduction > 0 %}
+                                                <div class="text-danger small mt-1">(Deduction: -{{ payroll.leave_deduction | inr }})</div>
+                                            {% else %}
+                                                <div class="text-muted small mt-1">(No Deductions)</div>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="p-3 bg-white rounded border text-center h-100">
+                                            <span class="text-muted small d-block mb-1">Payroll Details</span>
+                                            <div class="text-dark fw-semibold small mb-1">Working Days: {{ payroll.working_days }}</div>
+                                            <div class="text-muted small">Status: <span class="badge bg-info text-dark">{{ payroll.payroll_status }}</span></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="row g-2">
+                                    <div class="col-4 col-md-4">
+                                        <div class="p-2 bg-white rounded border text-center">
+                                            <span class="text-muted small d-block">Attendance %</span>
+                                            <strong class="text-success">{{ payroll.attendance_pct }}%</strong>
+                                        </div>
+                                    </div>
+                                    <div class="col-4 col-md-4">
+                                        <div class="p-2 bg-white rounded border text-center">
+                                            <span class="text-muted small d-block">Approved Leave Days</span>
+                                            <strong class="text-info">{{ payroll.approved_leave_days }}</strong>
+                                        </div>
+                                    </div>
+                                    <div class="col-4 col-md-4">
+                                        <div class="p-2 bg-white rounded border text-center">
+                                            <span class="text-muted small d-block">Performance %</span>
+                                            <strong class="text-primary">{{ payroll.performance_score }}%</strong>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
 
                             <!-- Performance Section -->
                             <div class="p-3 bg-light rounded border">
@@ -5270,12 +5559,48 @@ def view_employee(emp_id):
                         </div>
                     </div>
                 </div>
+                <script href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
             </body>
             </html>
             """,
         r=r,
         perf=perf,
+        payroll=payroll,
     )
+
+
+@app.route("/admin/employees/<int:emp_id>/update-salary", methods=["POST"])
+@login_required
+def update_employee_base_salary(emp_id):
+    if current_user.role != "admin":
+        flash("Admin access required to edit Base Salary.", "danger")
+        return redirect(url_for("dashboard"))
+
+    new_salary = request.form.get("salary")
+    try:
+        sal_val = float(new_salary) if new_salary is not None else 0.0
+    except (ValueError, TypeError):
+        flash("Invalid salary amount.", "danger")
+        return redirect(request.referrer or url_for("settings_payroll"))
+
+    with get_db() as conn:
+        emp = conn.execute(
+            "SELECT id, name FROM employees WHERE id = ?", (emp_id,)
+        ).fetchone()
+        if not emp:
+            flash("Employee not found.", "danger")
+            return redirect(url_for("settings_payroll"))
+
+        conn.execute(
+            "UPDATE employees SET salary = ? WHERE id = ?", (sal_val, emp_id)
+        )
+        conn.commit()
+
+    flash(
+        f"Base Salary for {emp['name']} updated successfully to {format_inr(sal_val)}.",
+        "success",
+    )
+    return redirect(request.referrer or url_for("settings_payroll"))
 
 
 @app.route("/admin/employees/<int:emp_id>/edit", methods=["GET", "POST"])
@@ -9704,6 +10029,13 @@ def settings_profile():
             (current_user.id,),
         ).fetchone()
 
+        emp_row = conn.execute(
+            "SELECT id FROM employees WHERE user_id = ? OR name = ? OR name = ? ORDER BY id LIMIT 1",
+            (current_user.id, current_user.full_name, current_user.username),
+        ).fetchone()
+
+        payroll = calculate_employee_payroll(conn, emp_row["id"]) if emp_row else None
+
     return render_template_string(
         """
         {% extends "base.html" %}
@@ -9727,9 +10059,9 @@ def settings_profile():
             {% endif %}
         {% endwith %}
 
-        <div class="row g-4">
+        <div class="row g-4 mb-4">
             <div class="col-md-4">
-                <div class="card shadow-sm text-center p-4">
+                <div class="card shadow-sm text-center p-4 h-100">
                     <div class="mb-3">
                         <div class="rounded-circle bg-primary bg-opacity-10 d-inline-flex align-items-center justify-content-center" style="width: 80px; height: 80px;">
                             <i class="bi bi-person-fill fs-1 text-primary"></i>
@@ -9742,7 +10074,7 @@ def settings_profile():
             </div>
 
             <div class="col-md-8">
-                <div class="card shadow-sm">
+                <div class="card shadow-sm h-100">
                     <div class="card-header bg-white py-3 border-0">
                         <h5 class="card-title mb-0 fw-bold"><i class="bi bi-pencil-square me-2 text-primary"></i>Edit Personal Information</h5>
                     </div>
@@ -9767,9 +10099,68 @@ def settings_profile():
                 </div>
             </div>
         </div>
+
+        {% if payroll %}
+        <!-- Payroll Section -->
+        <div class="card shadow-sm mb-4">
+            <div class="card-header bg-white py-3 border-0 d-flex flex-wrap justify-content-between align-items-center">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-wallet2 me-2 text-success"></i>Payroll Section</h5>
+                <span class="badge bg-success px-3 py-1 fs-6">{{ payroll.payroll_month }}</span>
+            </div>
+            <div class="card-body">
+                <div class="row g-3 mb-3">
+                    <div class="col-md-4">
+                        <div class="p-3 bg-light rounded border text-center h-100">
+                            <span class="text-muted small d-block mb-1">Current Base Salary</span>
+                            <strong class="fs-5 text-dark">{{ payroll.base_salary | inr }}</strong>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="p-3 bg-light rounded border text-center h-100">
+                            <span class="text-muted small d-block mb-1">Current Month Final Salary</span>
+                            <strong class="fs-4 text-success">{{ payroll.final_salary | inr }}</strong>
+                            {% if payroll.leave_deduction > 0 %}
+                                <div class="text-danger small mt-1">(Leave Deduction: -{{ payroll.leave_deduction | inr }})</div>
+                            {% else %}
+                                <div class="text-muted small mt-1">(No Deductions)</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="p-3 bg-light rounded border text-center h-100">
+                            <span class="text-muted small d-block mb-1">Payroll Month</span>
+                            <strong class="fs-6 text-primary">{{ payroll.payroll_month }}</strong>
+                            <div class="text-muted small mt-1">Status: <span class="badge bg-info text-dark">{{ payroll.payroll_status }}</span></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="row g-2">
+                    <div class="col-4 col-md-4">
+                        <div class="p-2 bg-light rounded border text-center">
+                            <span class="text-muted small d-block">Attendance %</span>
+                            <strong class="text-success">{{ payroll.attendance_pct }}%</strong>
+                        </div>
+                    </div>
+                    <div class="col-4 col-md-4">
+                        <div class="p-2 bg-light rounded border text-center">
+                            <span class="text-muted small d-block">Approved Leave Days</span>
+                            <strong class="text-info">{{ payroll.approved_leave_days }}</strong>
+                        </div>
+                    </div>
+                    <div class="col-4 col-md-4">
+                        <div class="p-2 bg-light rounded border text-center">
+                            <span class="text-muted small d-block">Performance %</span>
+                            <strong class="text-primary">{{ payroll.performance_score }}%</strong>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
         {% endblock %}
         """,
         u=u,
+        payroll=payroll,
     )
 
 
@@ -10101,60 +10492,103 @@ def settings_company():
 @app.route("/settings/payroll", methods=["GET", "POST"])
 @login_required
 def settings_payroll():
-    if current_user.role != "admin":
-        flash("Admin access required for Payroll Settings.", "danger")
-        return redirect(url_for("dashboard"))
-
     if request.method == "POST":
-        currency = request.form.get("currency", "INR (₹)").strip()
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE company_settings SET currency = ? WHERE id = 1", (currency,)
-            )
-            conn.commit()
-        flash("Payroll currency and settings updated.", "success")
-        return redirect(url_for("settings_payroll"))
+        action = request.form.get("action")
+        if action == "update_base_salary":
+            if current_user.role != "admin":
+                flash("Admin access required to edit Base Salary.", "danger")
+                return redirect(url_for("settings_payroll"))
+            emp_id = request.form.get("emp_id")
+            new_salary = request.form.get("salary")
+            try:
+                sal_val = float(new_salary) if new_salary is not None else 0.0
+                if emp_id is None:
+                    raise ValueError("Missing emp_id")
+                emp_id_val = int(emp_id)
+            except (ValueError, TypeError):
+                flash("Invalid salary input.", "danger")
+                return redirect(url_for("settings_payroll"))
+
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE employees SET salary = ? WHERE id = ?",
+                    (sal_val, emp_id_val),
+                )
+                conn.commit()
+            flash("Base salary updated successfully.", "success")
+            return redirect(url_for("settings_payroll"))
+        else:
+            if current_user.role != "admin":
+                flash("Admin access required to save currency settings.", "danger")
+                return redirect(url_for("settings_payroll"))
+            currency = request.form.get("currency", "INR (₹)").strip()
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE company_settings SET currency = ? WHERE id = 1",
+                    (currency,),
+                )
+                conn.commit()
+            flash("Payroll currency and settings updated.", "success")
+            return redirect(url_for("settings_payroll"))
+
+    now = datetime.datetime.now(tz=IST)
+    month_arg = request.args.get("month")
+    try:
+        if month_arg and "-" in month_arg:
+            y_str, m_str = month_arg.split("-", 1)
+            sel_year = int(y_str)
+            sel_month = int(m_str)
+        else:
+            sel_year = now.year
+            sel_month = now.month
+    except (ValueError, TypeError):
+        sel_year = now.year
+        sel_month = now.month
+
+    selected_month_str = f"{sel_year:04d}-{sel_month:02d}"
 
     with get_db() as conn:
         cs = conn.execute(
             "SELECT currency FROM company_settings WHERE id = 1"
         ).fetchone()
 
-        emp_rows = conn.execute(
-            "SELECT id, user_id, name, department, salary FROM employees ORDER BY name"
-        ).fetchall()
+        if current_user.role == "admin":
+            emp_rows = conn.execute(
+                "SELECT id FROM employees ORDER BY name"
+            ).fetchall()
+        else:
+            emp_rows = conn.execute(
+                "SELECT id FROM employees WHERE user_id = ? OR name = ? OR name = ? ORDER BY name",
+                (current_user.id, current_user.full_name, current_user.username),
+            ).fetchall()
+            if not emp_rows:
+                emp_rows = conn.execute(
+                    "SELECT id FROM employees ORDER BY name"
+                ).fetchall()
 
         payroll_list = []
-        for emp in emp_rows:
-            user_id = emp["user_id"]
-            if not user_id and emp["name"]:
-                u = conn.execute(
-                    "SELECT id FROM users WHERE full_name = ? OR username = ?",
-                    (emp["name"], emp["name"]),
-                ).fetchone()
-                if u:
-                    user_id = u["id"]
-
-            perf = calculate_employee_performance(conn, user_id)
-            payroll_list.append({
-                "emp_id": emp["id"],
-                "name": emp["name"],
-                "department": emp["department"] or "N/A",
-                "salary": emp["salary"],
-                "perf": perf,
-            })
+        for emp_r in emp_rows:
+            p_data = calculate_employee_payroll(conn, emp_r["id"], sel_year, sel_month)
+            if p_data:
+                payroll_list.append(p_data)
 
     currency = cs["currency"] if cs else "INR (₹)"
 
     return render_template_string(
         """
         {% extends "base.html" %}
-        {% block title %}Payroll Settings - Settings{% endblock %}
+        {% block title %}Payroll - HRMS{% endblock %}
         {% block page_content %}
-        <div class="page-header d-flex justify-content-between align-items-center mb-4">
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center mb-4 gap-3">
             <div>
-                <h1><i class="bi bi-currency-rupee me-2 text-primary"></i>Payroll & Currency Settings</h1>
-                <p>Manage salary calculation parameters, tax configurations, and system currency formatting.</p>
+                <h1><i class="bi bi-currency-rupee me-2 text-primary"></i>Payroll & Salary Management</h1>
+                <p class="text-muted mb-0">Automated monthly salary calculation based on Attendance, approved Leaves, and Base Salary.</p>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <form method="GET" action="{{ url_for('settings_payroll') }}" class="d-flex align-items-center gap-2">
+                    <label class="form-label mb-0 fw-semibold text-nowrap">Payroll Month:</label>
+                    <input type="month" name="month" value="{{ selected_month_str }}" class="form-control form-control-sm" onchange="this.form.submit()">
+                </form>
             </div>
         </div>
 
@@ -10169,86 +10603,137 @@ def settings_payroll():
             {% endif %}
         {% endwith %}
 
+        {% if current_user.role == 'admin' %}
         <div class="card shadow-sm mb-4">
             <div class="card-header bg-white py-3 border-0">
                 <h5 class="card-title mb-0 fw-bold"><i class="bi bi-cash-stack me-2 text-success"></i>Global Currency & Payroll Parameters</h5>
             </div>
             <div class="card-body">
                 <form method="POST" action="{{ url_for('settings_payroll') }}">
-                    <div class="mb-4">
+                    <div class="mb-3">
                         <label class="form-label fw-bold">Primary HRMS Currency</label>
                         <select name="currency" class="form-select">
                             <option value="INR (₹)" {% if currency == 'INR (₹)' %}selected{% endif %}>Indian Rupee (INR - ₹)</option>
                             <option value="USD ($)" {% if currency == 'USD ($)' %}selected{% endif %}>US Dollar (USD - $)</option>
                         </select>
-                        <div class="form-text text-muted">Selected currency symbol (₹) is applied across all employee profiles and financial report views.</div>
+                        <div class="form-text text-muted">Selected currency symbol is applied across all employee profiles and financial views.</div>
                     </div>
-
-                    <div class="row g-3 mb-4">
-                        <div class="col-md-6">
-                            <div class="p-3 bg-light rounded border">
-                                <h6 class="fw-bold mb-1"><i class="bi bi-calendar-range me-2 text-primary"></i>Default Pay Cycle</h6>
-                                <p class="text-muted small mb-0">Monthly Salary Cycle (1st to 30th/31st of every month)</p>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="p-3 bg-light rounded border">
-                                <h6 class="fw-bold mb-1"><i class="bi bi-file-earmark-text me-2 text-primary"></i>Taxation Structure</h6>
-                                <p class="text-muted small mb-0">Standard Indian Income Tax (TDS) Slabs</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <button type="submit" class="btn btn-primary"><i class="bi bi-check-circle me-1"></i>Save Payroll Settings</button>
+                    <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-check-circle me-1"></i>Save Currency Settings</button>
                 </form>
             </div>
         </div>
+        {% endif %}
 
-        <!-- Employee Salary & Performance Breakdown Table -->
+        <!-- Payroll Records Table -->
         <div class="card shadow-sm">
-            <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
-                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-wallet2 me-2 text-primary"></i>Employee Salary & Performance Breakdown</h5>
-                <span class="badge bg-light text-dark border">Informational Breakdown</span>
+            <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-wallet2 me-2 text-primary"></i>Employee Payroll Breakdown</h5>
+                <span class="badge bg-light text-dark border">Month: {{ selected_month_str }}</span>
             </div>
             <div class="card-body p-0">
                 <div class="table-responsive">
-                    <table class="table table-hover align-middle mb-0">
+                    <table class="table table-hover align-middle mb-0" style="font-size: 0.9rem;">
                         <thead class="table-light">
                             <tr>
                                 <th>Employee</th>
-                                <th>Department</th>
+                                <th>Payroll Month</th>
                                 <th>Base Salary</th>
-                                <th>Performance %</th>
+                                <th>Working Days</th>
+                                <th>Present Days</th>
                                 <th>Attendance %</th>
                                 <th>Approved Leaves</th>
-                                <th>Completed Tasks</th>
-                                <th>Overdue Tasks</th>
+                                <th>Unpaid Leaves</th>
+                                <th>Performance %</th>
+                                <th>Leave Deduction</th>
+                                <th>Final Salary</th>
+                                <th>Status</th>
+                                <th>Salary Breakdown</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for item in payroll_list %}
                                 <tr>
-                                    <td class="fw-bold">
+                                    <td class="fw-bold text-nowrap">
                                         <i class="bi bi-person-circle me-1 text-primary"></i>{{ item.name }}
+                                        <div class="text-muted small fw-normal">{{ item.department }}</div>
                                     </td>
-                                    <td><span class="badge bg-light text-dark border">{{ item.department }}</span></td>
-                                    <td class="fw-bold text-dark">{{ item.salary | inr if item.salary else 'N/A' }}</td>
+                                    <td class="text-nowrap">{{ item.payroll_month }}</td>
                                     <td>
-                                        <span class="badge {{ item.perf.badge_class }} me-1">{{ item.perf.performance_label }}</span>
-                                        <strong>{{ item.perf.performance_score }}%</strong>
+                                        {% if current_user.role == 'admin' %}
+                                            <form method="POST" action="{{ url_for('settings_payroll') }}" class="d-flex align-items-center gap-1" style="min-width: 130px;">
+                                                <input type="hidden" name="action" value="update_base_salary">
+                                                <input type="hidden" name="emp_id" value="{{ item.emp_id }}">
+                                                <input type="number" step="0.01" name="salary" class="form-control form-control-sm" value="{{ item.base_salary }}" required style="width: 85px;">
+                                                <button type="submit" class="btn btn-sm btn-outline-primary p-1" title="Save Base Salary"><i class="bi bi-check-lg"></i></button>
+                                            </form>
+                                        {% else %}
+                                            <span class="fw-bold text-dark">{{ item.base_salary | inr }}</span>
+                                        {% endif %}
                                     </td>
-                                    <td><span class="text-success fw-semibold">{{ item.perf.attendance_pct }}%</span></td>
-                                    <td><span class="text-info fw-semibold">{{ item.perf.approved_leaves }}</span></td>
-                                    <td><span class="text-primary fw-semibold">{{ item.perf.completed_tasks }}</span></td>
+                                    <td class="text-center"><span class="badge bg-light text-dark border">{{ item.working_days }}</span></td>
+                                    <td class="text-center"><span class="badge bg-success bg-opacity-10 text-success border border-success">{{ item.present_days }}</span></td>
+                                    <td class="text-center"><span class="fw-semibold text-success">{{ item.attendance_pct }}%</span></td>
+                                    <td class="text-center"><span class="fw-semibold text-info">{{ item.approved_leave_days }}</span></td>
+                                    <td class="text-center"><span class="{% if item.unpaid_leave_days > 0 %}text-danger fw-bold{% else %}text-muted{% endif %}">{{ item.unpaid_leave_days }}</span></td>
+                                    <td class="text-center"><span class="fw-semibold text-primary">{{ item.performance_score }}%</span></td>
+                                    <td class="text-danger fw-semibold">{{ item.leave_deduction | inr }}</td>
+                                    <td class="fw-bold text-success fs-6">{{ item.final_salary | inr }}</td>
+                                    <td><span class="badge bg-info text-dark">{{ item.payroll_status }}</span></td>
                                     <td>
-                                        <span class="{% if item.perf.overdue_tasks > 0 %}text-danger fw-bold{% else %}text-muted{% endif %}">
-                                            {{ item.perf.overdue_tasks }}
-                                        </span>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" data-bs-toggle="modal" data-bs-target="#breakdownModal{{ item.emp_id }}">
+                                            <i class="bi bi-calculator me-1"></i>Breakdown
+                                        </button>
+
+                                        <!-- Breakdown Modal -->
+                                        <div class="modal fade" id="breakdownModal{{ item.emp_id }}" tabindex="-1" aria-hidden="true">
+                                            <div class="modal-dialog modal-dialog-centered">
+                                                <div class="modal-content">
+                                                    <div class="modal-header">
+                                                        <h5 class="modal-title fw-bold"><i class="bi bi-file-earmark-spreadsheet me-2 text-primary"></i>Salary Breakdown - {{ item.name }}</h5>
+                                                        <button type="button" class="btn-close" data-bs-dismiss="button" data-bs-dismiss="modal" aria-label="Close"></button>
+                                                    </div>
+                                                    <div class="modal-body">
+                                                        <div class="list-group list-group-flush">
+                                                            <div class="list-group-item d-flex justify-content-between align-items-center">
+                                                                <span>Base Monthly Salary</span>
+                                                                <strong class="text-dark">{{ item.base_salary | inr }}</strong>
+                                                            </div>
+                                                            <div class="list-group-item d-flex justify-content-between align-items-center">
+                                                                <span>Total Working Days</span>
+                                                                <span>{{ item.working_days }} Days</span>
+                                                            </div>
+                                                            <div class="list-group-item d-flex justify-content-between align-items-center">
+                                                                <span>Calculated Per Day Salary</span>
+                                                                <span>{{ item.per_day_salary | inr }} / day</span>
+                                                            </div>
+                                                            <div class="list-group-item d-flex justify-content-between align-items-center">
+                                                                <span>Unpaid Leave Days</span>
+                                                                <span class="text-danger fw-bold">{{ item.unpaid_leave_days }} Days</span>
+                                                            </div>
+                                                            <div class="list-group-item d-flex justify-content-between align-items-center">
+                                                                <span>Leave Deduction</span>
+                                                                <strong class="text-danger">- {{ item.leave_deduction | inr }}</strong>
+                                                            </div>
+                                                            <div class="list-group-item d-flex justify-content-between align-items-center bg-light">
+                                                                <span class="fw-bold fs-6">Final Calculated Salary</span>
+                                                                <strong class="text-success fs-5">{{ item.final_salary | inr }}</strong>
+                                                            </div>
+                                                        </div>
+                                                        <div class="mt-3 text-muted small">
+                                                            <i class="bi bi-info-circle me-1"></i>Performance Score ({{ item.performance_score }}%) is informational and does not deduct salary.
+                                                        </div>
+                                                    </div>
+                                                    <div class="modal-footer">
+                                                        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </td>
                                 </tr>
                             {% else %}
                                 <tr>
-                                    <td colspan="8" class="text-center py-4 text-muted">No employee salary records found.</td>
+                                    <td colspan="13" class="text-center py-4 text-muted">No employee salary records found.</td>
                                 </tr>
                             {% endfor %}
                         </tbody>
@@ -10260,6 +10745,7 @@ def settings_payroll():
         """,
         currency=currency,
         payroll_list=payroll_list,
+        selected_month_str=selected_month_str,
     )
 
 

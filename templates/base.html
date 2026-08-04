@@ -86,7 +86,7 @@
                             <a class="sidebar-sublink {% if active_endpoint == 'settings_security' %}active{% endif %}" href="{{ url_for('settings_security') }}"><i class="bi bi-shield-lock"></i><span>Security</span></a>
                             <a class="sidebar-sublink {% if active_endpoint == 'settings_appearance' %}active{% endif %}" href="{{ url_for('settings_appearance') }}"><i class="bi bi-palette"></i><span>Appearance</span></a>
                             {% if is_admin %}<a class="sidebar-sublink {% if active_endpoint == 'settings_company' %}active{% endif %}" href="{{ url_for('settings_company') }}"><i class="bi bi-building-gear"></i><span>Company</span></a>{% endif %}
-                            {% if is_admin %}<a class="sidebar-sublink {% if active_endpoint == 'settings_payroll' %}active{% endif %}" href="{{ url_for('settings_payroll') }}"><i class="bi bi-currency-rupee"></i><span>Payroll</span></a>{% endif %}
+                            <a class="sidebar-sublink {% if active_endpoint == 'settings_payroll' %}active{% endif %}" href="{{ url_for('settings_payroll') }}"><i class="bi bi-currency-rupee"></i><span>Payroll</span></a>
                             <a class="sidebar-sublink {% if active_endpoint == 'settings_notifications' %}active{% endif %}" href="{{ url_for('settings_notifications') }}"><i class="bi bi-bell-gear"></i><span>Notifications</span></a>
                         </div>
                     </div>
