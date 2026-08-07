@@ -603,7 +603,7 @@ def is_user_online(last_active_at_str):
         dt = datetime.datetime.strptime(last_active_at_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST)
         now = datetime.datetime.now(tz=IST)
         return (now - dt).total_seconds() < 300
-    except Exception:
+    except (ValueError, TypeError):
         return False
 
 
@@ -638,10 +638,11 @@ def process_and_save_profile_pic(file_storage, user_id):
             img = img.convert("RGB")
         width, height = img.size
         if width != 256 or height != 256:
-            resample_mode = getattr(Image, "Resampling", Image).LANCZOS
+            resample_mode = getattr(getattr(Image, "Resampling", Image), "LANCZOS", 1)
             img = img.resize((256, 256), resample_mode)
         img.save(dest_path)
-    except Exception:
+    except Exception as e:  # noqa: BLE001
+        app.logger.warning("Failed to process profile picture with PIL: %s", e)
         file_storage.seek(0)
         file_storage.save(dest_path)
 
@@ -745,6 +746,8 @@ def ensure_employee_table():
             conn.execute("ALTER TABLE employees ADD COLUMN user_id INTEGER")
         if "contact_number" not in columns:
             conn.execute("ALTER TABLE employees ADD COLUMN contact_number TEXT")
+        if "paid_leave_entitlement" not in columns:
+            conn.execute("ALTER TABLE employees ADD COLUMN paid_leave_entitlement REAL DEFAULT 12.0")
         # Existing employee records have no linked user and remain untouched.
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_user_id "
@@ -977,6 +980,87 @@ def ensure_leave_requests_table():
             """
         )
         conn.commit()
+
+
+def get_user_paid_leave_balance(conn, user_id):
+    """Calculates paid leave entitlement, approved paid leave used, and remaining balance for a user.
+
+    Balance = Entitlement - Approved Paid Leave Used.
+    Only Approved paid leave requests count as used.
+    Pending, Rejected, and Cancelled requests do not reduce balance.
+    """
+    close_conn = False
+    if conn is None:
+        conn = get_db()
+        close_conn = True
+
+    try:
+        emp = conn.execute(
+            "SELECT paid_leave_entitlement FROM employees WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+
+        if emp and emp["paid_leave_entitlement"] is not None:
+            entitlement = float(emp["paid_leave_entitlement"])
+        else:
+            entitlement = 12.0
+
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(total_days), 0.0) AS used_days
+            FROM leave_requests
+            WHERE user_id = ?
+              AND status = 'Approved'
+              AND LOWER(leave_type) != 'unpaid leave'
+            """,
+            (user_id,),
+        ).fetchone()
+
+        used = float(row["used_days"]) if row else 0.0
+        remaining = max(0.0, round(entitlement - used, 1))
+
+        return {
+            "entitlement": entitlement,
+            "used": used,
+            "remaining": remaining,
+        }
+    finally:
+        if close_conn:
+            conn.close()
+
+
+def set_user_paid_leave_entitlement(conn, target_user_id, entitlement_value):
+    """Sets or updates the paid leave entitlement for a user within a transaction."""
+    close_conn = False
+    if conn is None:
+        conn = get_db()
+        close_conn = True
+
+    try:
+        entitlement_val = max(0.0, float(entitlement_value))
+        emp = conn.execute(
+            "SELECT id FROM employees WHERE user_id = ?", (target_user_id,)
+        ).fetchone()
+
+        if emp:
+            conn.execute(
+                "UPDATE employees SET paid_leave_entitlement = ? WHERE user_id = ?",
+                (entitlement_val, target_user_id),
+            )
+        else:
+            user = conn.execute(
+                "SELECT username, full_name FROM users WHERE id = ?", (target_user_id,)
+            ).fetchone()
+            name = (user["full_name"] if user and user["full_name"] else user["username"]) if user else "Employee"
+            conn.execute(
+                "INSERT INTO employees (user_id, name, paid_leave_entitlement) VALUES (?, ?, ?)",
+                (target_user_id, name, entitlement_val),
+            )
+        conn.commit()
+    finally:
+        if close_conn:
+            conn.close()
+
 
 
 def ensure_performance_reviews_table():
@@ -1643,8 +1727,8 @@ def update_user_activity():
                     (now_str, current_user.id),
                 )
                 conn.commit()
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            app.logger.debug("Failed to update user last_active_at: %s", e)
 
 
 @app.context_processor
@@ -4440,8 +4524,8 @@ def logout():
         with get_db() as conn:
             conn.execute("UPDATE users SET last_active_at = NULL WHERE id = ?", (current_user.id,))
             conn.commit()
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001
+        app.logger.debug("Failed to clear last_active_at on logout: %s", e)
     logout_user()
     flash("You have been logged out.", "info")
     return redirect(url_for("index"))
@@ -5526,6 +5610,8 @@ def admin_users():
                                 <td>
                                     {% if u.role == 'admin' %}
                                         <span class="badge bg-primary fs-6"><i class="bi bi-shield-check me-1"></i>Admin</span>
+                                    {% elif u.role == 'hr' %}
+                                        <span class="badge bg-info text-dark fs-6"><i class="bi bi-person-badge me-1"></i>HR</span>
                                     {% else %}
                                         <span class="badge bg-secondary fs-6">User</span>
                                     {% endif %}
@@ -7311,12 +7397,16 @@ def apply_leave():
         "Maternity Leave",
         "Paternity Leave",
     ]
+    with get_db() as conn:
+        leave_balance = get_user_paid_leave_balance(conn, current_user.id)
+
     if request.is_json or request.headers.get("Accept") == "application/json":
         return jsonify(
             {
                 "status": "success",
                 "action": "apply_leave",
                 "leave_types": valid_leave_types,
+                "leave_balance": leave_balance,
                 "message": "Submit a POST request with leave_type, start_date, end_date, and reason to apply for leave.",
             }
         )
@@ -7332,7 +7422,8 @@ def apply_leave():
             </div>
             <div class="d-flex gap-2">
                 <a class="btn btn-outline-secondary" href="{{ url_for('my_leave_requests') }}"><i class="bi bi-clock-history me-1"></i>My Requests</a>
-                {% if current_user.role == 'admin' %}
+                {% if current_user.role in ['admin', 'hr'] %}
+                    <a class="btn btn-outline-secondary" href="{{ url_for('admin_leave_entitlements') }}"><i class="bi bi-person-workspace me-1"></i>Leave Entitlements</a>
                     <a class="btn btn-outline-secondary" href="{{ url_for('pending_leave_requests') }}"><i class="bi bi-hourglass-split me-1"></i>Pending Queue</a>
                     <a class="btn btn-outline-secondary" href="{{ url_for('view_all_leave_requests') }}"><i class="bi bi-list-task me-1"></i>All Requests</a>
                 {% endif %}
@@ -7349,6 +7440,33 @@ def apply_leave():
                 {% endfor %}
             {% endif %}
         {% endwith %}
+
+        <div class="row g-3 mb-4 mx-auto" style="max-width: 680px;">
+            <div class="col-md-4">
+                <div class="card shadow-sm border-0 border-start border-primary border-4 text-center py-2">
+                    <div class="card-body py-2">
+                        <div class="text-muted small fw-semibold">Paid Entitlement</div>
+                        <div class="fs-4 fw-bold text-primary">{{ leave_balance.entitlement }} <span class="fs-6 text-muted">days</span></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card shadow-sm border-0 border-start border-warning border-4 text-center py-2">
+                    <div class="card-body py-2">
+                        <div class="text-muted small fw-semibold">Approved Used</div>
+                        <div class="fs-4 fw-bold text-warning">{{ leave_balance.used }} <span class="fs-6 text-muted">days</span></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card shadow-sm border-0 border-start border-success border-4 text-center py-2">
+                    <div class="card-body py-2">
+                        <div class="text-muted small fw-semibold">Remaining Balance</div>
+                        <div class="fs-4 fw-bold text-success">{{ leave_balance.remaining }} <span class="fs-6 text-muted">days</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <div class="card shadow-sm mx-auto" style="max-width: 680px;">
             <div class="card-body">
@@ -7387,7 +7505,8 @@ def apply_leave():
             </div>
         </div>
         {% endblock %}
-        """
+        """,
+        leave_balance=leave_balance,
     )
 
 
@@ -7407,9 +7526,10 @@ def my_leave_requests():
             (current_user.id,),
         ).fetchall()
         requests_list = [dict(row) for row in rows]
+        leave_balance = get_user_paid_leave_balance(conn, current_user.id)
 
     if request.is_json or request.headers.get("Accept") == "application/json":
-        return jsonify({"status": "success", "leave_requests": requests_list})
+        return jsonify({"status": "success", "leave_requests": requests_list, "leave_balance": leave_balance})
 
     return render_template_string(
         """
@@ -7423,7 +7543,8 @@ def my_leave_requests():
             </div>
             <div class="d-flex gap-2">
                 <a class="btn btn-primary" href="{{ url_for('apply_leave') }}"><i class="bi bi-plus-lg me-1"></i>Apply Leave</a>
-                {% if current_user.role == 'admin' %}
+                {% if current_user.role in ['admin', 'hr'] %}
+                    <a class="btn btn-outline-secondary" href="{{ url_for('admin_leave_entitlements') }}"><i class="bi bi-person-workspace me-1"></i>Leave Entitlements</a>
                     <a class="btn btn-outline-secondary" href="{{ url_for('pending_leave_requests') }}"><i class="bi bi-hourglass-split me-1"></i>Pending Queue</a>
                     <a class="btn btn-outline-secondary" href="{{ url_for('view_all_leave_requests') }}"><i class="bi bi-list-task me-1"></i>All Leave History</a>
                 {% endif %}
@@ -7440,6 +7561,33 @@ def my_leave_requests():
                 {% endfor %}
             {% endif %}
         {% endwith %}
+
+        <div class="row g-3 mb-4">
+            <div class="col-md-4">
+                <div class="card shadow-sm border-0 border-start border-primary border-4 text-center py-2">
+                    <div class="card-body py-2">
+                        <div class="text-muted small fw-semibold">Paid Entitlement</div>
+                        <div class="fs-4 fw-bold text-primary">{{ leave_balance.entitlement }} <span class="fs-6 text-muted">days</span></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card shadow-sm border-0 border-start border-warning border-4 text-center py-2">
+                    <div class="card-body py-2">
+                        <div class="text-muted small fw-semibold">Approved Used</div>
+                        <div class="fs-4 fw-bold text-warning">{{ leave_balance.used }} <span class="fs-6 text-muted">days</span></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card shadow-sm border-0 border-start border-success border-4 text-center py-2">
+                    <div class="card-body py-2">
+                        <div class="text-muted small fw-semibold">Remaining Balance</div>
+                        <div class="fs-4 fw-bold text-success">{{ leave_balance.remaining }} <span class="fs-6 text-muted">days</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <div class="card shadow-sm">
             <div class="card-body p-0">
@@ -7507,6 +7655,7 @@ def my_leave_requests():
         {% endblock %}
         """,
         requests=requests_list,
+        leave_balance=leave_balance,
     )
 
 
@@ -7544,6 +7693,207 @@ def cancel_leave(leave_id):
     if request.is_json:
         return jsonify({"status": "success", "message": msg})
     return redirect(url_for("my_leave_requests"))
+
+
+@app.route("/admin/leave/entitlements", methods=["GET", "POST"])
+@login_required
+def admin_leave_entitlements():
+    if current_user.role not in ("admin", "hr"):
+        flash("Access denied.", "danger")
+        if request.is_json or request.headers.get("Accept") == "application/json":
+            return jsonify({"status": "error", "message": "Access denied."}), 403
+        return redirect(url_for("dashboard"))
+
+    if request.method == "POST":
+        if request.is_json and request.json:
+            data = request.json
+            target_user_id = data.get("user_id")
+            entitlement_val = data.get("entitlement")
+        else:
+            target_user_id = request.form.get("user_id")
+            entitlement_val = request.form.get("entitlement")
+
+        try:
+            if target_user_id is None or entitlement_val is None:
+                raise ValueError("Missing user_id or entitlement value.")
+            target_user_id = int(target_user_id)
+            entitlement_val = float(entitlement_val)
+            if entitlement_val < 0:
+                raise ValueError("Entitlement cannot be negative.")
+        except (TypeError, ValueError):
+            msg = "Invalid employee or entitlement value provided."
+            flash(msg, "danger")
+            if request.is_json:
+                return jsonify({"status": "error", "message": msg}), 400
+            return redirect(url_for("admin_leave_entitlements"))
+
+        with get_db() as conn:
+            target_user = conn.execute("SELECT id, username, full_name FROM users WHERE id = ?", (target_user_id,)).fetchone()
+            if not target_user:
+                msg = "User account not found."
+                flash(msg, "danger")
+                if request.is_json:
+                    return jsonify({"status": "error", "message": msg}), 404
+                return redirect(url_for("admin_leave_entitlements"))
+
+            set_user_paid_leave_entitlement(conn, target_user_id, entitlement_val)
+            user_name = target_user["full_name"] or target_user["username"]
+
+        msg = f"Paid leave entitlement for '{user_name}' updated to {entitlement_val} days."
+        flash(msg, "success")
+        create_notification(
+            target_user_id,
+            "Paid Leave Entitlement Updated",
+            f"Your annual paid leave entitlement has been set to {entitlement_val} days.",
+            url_for("my_leave_requests"),
+        )
+        if request.is_json:
+            return jsonify({"status": "success", "message": msg, "user_id": target_user_id, "entitlement": entitlement_val})
+        return redirect(url_for("admin_leave_entitlements"))
+
+    with get_db() as conn:
+        users = conn.execute(
+            """
+            SELECT u.id, u.username, u.full_name, u.email, u.role
+            FROM users u
+            ORDER BY u.full_name ASC, u.username ASC
+            """
+        ).fetchall()
+
+        entitlements_list = []
+        for u in users:
+            bal = get_user_paid_leave_balance(conn, u["id"])
+            entitlements_list.append({
+                "user_id": u["id"],
+                "username": u["username"],
+                "full_name": u["full_name"],
+                "email": u["email"],
+                "role": u["role"],
+                "entitlement": bal["entitlement"],
+                "used": bal["used"],
+                "remaining": bal["remaining"],
+            })
+
+    if request.is_json or request.headers.get("Accept") == "application/json":
+        return jsonify({"status": "success", "entitlements": entitlements_list})
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Paid Leave Entitlements{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>Paid Leave Entitlements</h1>
+                <p>Manage individual employee paid leave entitlements and view real-time balances.</p>
+            </div>
+            <div class="d-flex gap-2">
+                <a class="btn btn-outline-secondary" href="{{ url_for('pending_leave_requests') }}"><i class="bi bi-hourglass-split me-1"></i>Pending Queue</a>
+                <a class="btn btn-outline-secondary" href="{{ url_for('view_all_leave_requests') }}"><i class="bi bi-list-task me-1"></i>All Requests</a>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-person-workspace me-2 text-primary"></i>Employee Leave Balances</h5>
+                <span class="badge bg-light text-dark border">Total Users: {{ entitlements|length }}</span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Employee / User</th>
+                                <th>Role</th>
+                                <th>Paid Leave Entitlement</th>
+                                <th>Approved Used</th>
+                                <th>Remaining Balance</th>
+                                <th class="text-end">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in entitlements %}
+                                <tr>
+                                    <td class="fw-bold">
+                                        <i class="bi bi-person-circle me-2 text-secondary"></i>
+                                        {{ item.full_name or item.username }}
+                                        {% if item.full_name %}<br><small class="text-muted ms-4">@{{ item.username }}</small>{% endif %}
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-{% if item.role == 'admin' %}primary{% elif item.role == 'hr' %}info text-dark{% else %}secondary{% endif %}">
+                                            {{ 'HR' if item.role == 'hr' else (item.role|title) }}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span class="fw-bold text-dark fs-6">{{ item.entitlement }} days</span>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-warning text-dark fs-6">{{ item.used }} days</span>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-{% if item.remaining > 3 %}success{% elif item.remaining > 0 %}warning text-dark{% else %}danger{% endif %} fs-6">
+                                            {{ item.remaining }} days remaining
+                                        </span>
+                                    </td>
+                                    <td class="text-end">
+                                        <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editModal{{ item.user_id }}">
+                                            <i class="bi bi-pencil-square me-1"></i>Set Entitlement
+                                        </button>
+
+                                        <div class="modal fade text-start" id="editModal{{ item.user_id }}" tabindex="-1" aria-hidden="true">
+                                            <div class="modal-dialog modal-dialog-centered">
+                                                <div class="modal-content">
+                                                    <form method="post" action="{{ url_for('admin_leave_entitlements') }}">
+                                                        <input type="hidden" name="user_id" value="{{ item.user_id }}">
+                                                        <div class="modal-header">
+                                                            <h5 class="modal-header-title fw-bold">Set Paid Leave Entitlement</h5>
+                                                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                                        </div>
+                                                        <div class="modal-body">
+                                                            <p class="mb-3">Updating paid leave entitlement for <strong>{{ item.full_name or item.username }}</strong> (@{{ item.username }}):</p>
+                                                            <div class="mb-3">
+                                                                <label class="form-label fw-semibold">Annual Paid Leave Entitlement (Days)</label>
+                                                                <input type="number" step="0.5" min="0" class="form-control" name="entitlement" value="{{ item.entitlement }}" required>
+                                                            </div>
+                                                            <div class="alert alert-info py-2 small mb-0">
+                                                                <i class="bi bi-info-circle me-1"></i>Current Approved Paid Used: <strong>{{ item.used }} days</strong>. New balance will be <strong>Entitlement - {{ item.used }}</strong>.
+                                                            </div>
+                                                        </div>
+                                                        <div class="modal-footer">
+                                                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                                            <button type="submit" class="btn btn-primary"><i class="bi bi-check-circle me-1"></i>Save Entitlement</button>
+                                                        </div>
+                                                    </form>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            {% else %}
+                                <tr>
+                                    <td colspan="6" class="text-center py-4 text-muted">No employees found.</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endblock %}
+        """,
+        entitlements=entitlements_list,
+    )
 
 
 @app.route("/admin/leave/all", methods=["GET"])
@@ -8543,6 +8893,7 @@ def employee_performance_profile(user_id):
         {% endblock %}
         """,
         emp=emp_user,
+        perf=perf,
         reviews=reviews,
         avg_overall=avg_overall,
         avg_tech=avg_tech,
@@ -10375,8 +10726,8 @@ def settings_profile():
                     if os.path.exists(old_file_path):
                         try:
                             os.remove(old_file_path)
-                        except Exception:
-                            pass
+                        except OSError as e:
+                            app.logger.debug("Failed to remove old profile picture: %s", e)
                 conn.execute("UPDATE users SET profile_pic = NULL WHERE id = ?", (current_user.id,))
                 conn.commit()
             flash("Profile picture removed.", "success")
@@ -10400,8 +10751,8 @@ def settings_profile():
                     if os.path.exists(old_file_path):
                         try:
                             os.remove(old_file_path)
-                        except Exception:
-                            pass
+                        except OSError as e:
+                            app.logger.debug("Failed to remove old profile picture: %s", e)
                 conn.execute(
                     "UPDATE users SET full_name = ?, email = ?, profile_pic = ? WHERE id = ?",
                     (full_name or None, email or None, rel_pic_path, current_user.id),
@@ -11247,7 +11598,7 @@ def settings_payroll():
             if emp_id and month_year_val:
                 try:
                     y, m = [int(x) for x in month_year_val.split("-")]
-                except Exception:
+                except (ValueError, TypeError, AttributeError):
                     y, m = now.year, now.month
 
                 with get_db() as conn:
@@ -11377,7 +11728,7 @@ def settings_payroll():
             try:
                 hy, hm = [int(x) for x in h_dict["month_year"].split("-")]
                 h_dict["month_name"] = datetime.date(hy, hm, 1).strftime("%B %Y")
-            except Exception:
+            except (ValueError, TypeError, AttributeError, KeyError):
                 h_dict["month_name"] = h_dict["month_year"]
             payroll_history.append(h_dict)
 
