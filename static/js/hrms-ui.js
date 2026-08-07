@@ -144,19 +144,6 @@
   document.addEventListener('DOMContentLoaded', () => {
     initPasswordToggle();
 
-    // Attach listener for Sidebar Display Preference on Appearance Settings page
-    const sidebarSelect = document.querySelector('select[name="sidebar_style"]');
-    if (sidebarSelect) {
-      sidebarSelect.addEventListener('change', (e) => {
-        const isCompact = (e.target.value === 'compact');
-        if (window.innerWidth > 900) {
-          setSidebarCollapsed(isCompact, true);
-        } else {
-          localStorage.setItem('hrms-sidebar-state', isCompact ? 'collapsed' : 'expanded');
-        }
-      });
-    }
-
     // Attach live change listeners for theme radio buttons on Appearance Settings page
     ['themeLight', 'themeDark', 'themeSystem'].forEach(id => {
       const radio = document.getElementById(id);

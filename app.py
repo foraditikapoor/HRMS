@@ -1741,7 +1741,7 @@ def calculate_employee_payroll(conn, emp_id, year=None, month=None):
         working_days = 0
         for d in range(1, num_days + 1):
             d_obj = datetime.date(year, month, d)
-            if d_obj.weekday() not in (5, 6) and d_obj.isoformat() not in holiday_dates:
+            if d_obj.weekday() != 6 and d_obj.isoformat() not in holiday_dates:
                 working_days += 1
 
         # Attendance & Present days calculation using existing helper
@@ -4816,7 +4816,7 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
         d_obj = datetime.date(year, month, day)
         d_str = d_obj.isoformat()
         weekday = d_obj.weekday()  # 0=Mon, 5=Sat, 6=Sun
-        is_weekend = weekday in (5, 6)
+        is_weekend = (weekday == 6)
 
         att_entry = att_dict.get(d_str)
         leave_entry = get_leave_for_date(d_str)
@@ -5163,7 +5163,7 @@ def employee_attendance_calendar():
                     <div class="calendar-weekday-header">Wed</div>
                     <div class="calendar-weekday-header">Thu</div>
                     <div class="calendar-weekday-header">Fri</div>
-                    <div class="calendar-weekday-header text-danger">Sat</div>
+                    <div class="calendar-weekday-header">Sat</div>
                     <div class="calendar-weekday-header text-danger">Sun</div>
 
                     <!-- Offset Empty Cells -->
@@ -5524,7 +5524,7 @@ def admin_attendance():
                         <div class="calendar-weekday-header">Wed</div>
                         <div class="calendar-weekday-header">Thu</div>
                         <div class="calendar-weekday-header">Fri</div>
-                        <div class="calendar-weekday-header text-danger">Sat</div>
+                        <div class="calendar-weekday-header">Sat</div>
                         <div class="calendar-weekday-header text-danger">Sun</div>
 
                         {% for _ in range(single_cal_data.first_weekday) %}
@@ -7700,7 +7700,7 @@ def apply_leave():
             leave_days_count = 0.0
             curr_d = start_date
             while curr_d <= end_date:
-                if curr_d.isoformat() not in holiday_dates:
+                if curr_d.weekday() != 6 and curr_d.isoformat() not in holiday_dates:
                     leave_days_count += 1.0
                 curr_d += datetime.timedelta(days=1)
             total_days = leave_days_count
@@ -11492,15 +11492,14 @@ def settings_security():
 def settings_appearance():
     if request.method == "POST":
         theme = request.form.get("theme", "light").strip()
-        sidebar_style = request.form.get("sidebar_style", "default").strip()
         with get_db() as conn:
             conn.execute(
                 """
-                INSERT INTO user_preferences (user_id, theme, sidebar_style)
-                VALUES (?, ?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET theme = excluded.theme, sidebar_style = excluded.sidebar_style
+                INSERT INTO user_preferences (user_id, theme)
+                VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET theme = excluded.theme
             """,
-                (current_user.id, theme, sidebar_style),
+                (current_user.id, theme),
             )
             conn.commit()
         flash("Appearance preferences saved.", "success")
@@ -11508,12 +11507,11 @@ def settings_appearance():
 
     with get_db() as conn:
         pref = conn.execute(
-            "SELECT theme, sidebar_style FROM user_preferences WHERE user_id = ?",
+            "SELECT theme FROM user_preferences WHERE user_id = ?",
             (current_user.id,),
         ).fetchone()
 
     theme = pref["theme"] if pref else "light"
-    sidebar_style = pref["sidebar_style"] if pref else "default"
 
     return render_template_string(
         """
@@ -11523,7 +11521,7 @@ def settings_appearance():
         <div class="page-header d-flex justify-content-between align-items-center mb-4">
             <div>
                 <h1><i class="bi bi-palette me-2 text-primary"></i>Appearance Settings</h1>
-                <p>Customize UI color themes, layout density, and sidebar preferences.</p>
+                <p>Customize UI color themes and display preferences.</p>
             </div>
         </div>
 
@@ -11540,7 +11538,7 @@ def settings_appearance():
 
         <div class="card shadow-sm">
             <div class="card-header bg-white py-3 border-0">
-                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-sliders me-2 text-primary"></i>Theme & Layout Customization</h5>
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-sliders me-2 text-primary"></i>Theme Customization</h5>
             </div>
             <div class="card-body">
                 <form method="POST" action="{{ url_for('settings_appearance') }}">
@@ -11577,14 +11575,6 @@ def settings_appearance():
                         </div>
                     </div>
 
-                    <div class="mb-4">
-                        <label class="form-label fw-bold">Sidebar Display Preference</label>
-                        <select name="sidebar_style" class="form-select">
-                            <option value="default" {% if sidebar_style == 'default' %}selected{% endif %}>Expanded Default Sidebar</option>
-                            <option value="compact" {% if sidebar_style == 'compact' %}selected{% endif %}>Compact Navigation Bar</option>
-                        </select>
-                    </div>
-
                     <button type="submit" class="btn btn-primary"><i class="bi bi-check-circle me-1"></i>Save Appearance</button>
                 </form>
             </div>
@@ -11592,7 +11582,6 @@ def settings_appearance():
         {% endblock %}
         """,
         theme=theme,
-        sidebar_style=sidebar_style,
     )
 
 
