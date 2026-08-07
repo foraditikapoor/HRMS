@@ -5772,75 +5772,73 @@ def admin_employees():
         ).fetchall()
     return render_template_string(
         """
-        <!doctype html>
-        <html lang="en">
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Employee Management</title>
-            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-        </head>
-        <body class="bg-light">
-            <div class="container py-5">
-                <div class="d-flex align-items-center mb-3">
-                    <a class="btn btn-outline-secondary me-3" href="{{ url_for('dashboard') }}">Back</a>
-                    <h1 class="h3 me-auto mb-0">Employee Management</h1>
-                    <a class="btn btn-success" href="{{ url_for('create_user') }}">Create User</a>
+        {% extends "base.html" %}
+        {% block title %}Employee Management{% endblock %}
+        {% block page_content %}
+        <div class="container-fluid py-4">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+                <div>
+                    <h1 class="h3 mb-1"><i class="bi bi-people me-2 text-primary"></i>Employee Management</h1>
+                    <p class="text-muted mb-0">Overview employee records, departments, base salaries, and profiles.</p>
                 </div>
+                <div class="d-flex gap-2 flex-wrap">
+                    <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}"><i class="bi bi-arrow-left me-1"></i>Dashboard</a>
+                    <a class="btn btn-primary" href="{{ url_for('add_employee') }}"><i class="bi bi-person-plus me-1"></i>Add Employee</a>
+                    <a class="btn btn-success" href="{{ url_for('create_user') }}"><i class="bi bi-person-lock me-1"></i>Create User Account</a>
+                </div>
+            </div>
 
-                {% with messages = get_flashed_messages(with_categories=true) %}
-                    {% if messages %}
-                        {% for category, message in messages %}
-                            <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
-                                {{ message }}
-                                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                            </div>
-                        {% endfor %}
-                    {% endif %}
-                {% endwith %}
-
-                <div class="card shadow-sm">
-                    <div class="card-body">
-                        <div class="table-responsive">
-                            <table class="table table-striped align-middle mb-0">
-                                <thead>
-                                    <tr>
-                                        <th>Name</th>
-                                        <th>Department</th>
-                                        <th>Salary</th>
-                                        <th class="text-end">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                {% for r in rows %}
-                                    <tr>
-                                        <td class="fw-bold">{{ r.name }}</td>
-                                        <td>{{ r.department or '' }}</td>
-                                        <td>{{ r.salary | inr if r.salary else 'N/A' }}</td>
-                                        <td class="text-end">
-                                            <div class="d-inline-flex gap-1">
-                                                <a class="btn btn-sm btn-primary" href="{{ url_for('view_employee', emp_id=r.id) }}">View</a>
-                                                <a class="btn btn-sm btn-secondary" href="{{ url_for('edit_employee', emp_id=r.id) }}">Edit</a>
-                                                <form method="post" action="{{ url_for('delete_employee', emp_id=r.id) }}" style="display:inline-block;" onsubmit="return confirm('Are you sure you want to permanently delete employee {{ r.name }} and all associated user records? This action cannot be undone.');">
-                                                    <button class="btn btn-sm btn-danger" type="submit">Delete</button>
-                                                </form>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                {% else %}
-                                    <tr>
-                                        <td colspan="4" class="text-center text-muted py-4">No employees found.</td>
-                                    </tr>
-                                {% endfor %}
-                                </tbody>
-                            </table>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
                         </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            <div class="card shadow-sm border-0">
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th class="ps-4">Name</th>
+                                    <th>Department</th>
+                                    <th>Salary</th>
+                                    <th class="text-end pe-4">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            {% for r in rows %}
+                                <tr>
+                                    <td class="ps-4 fw-bold">{{ r.name }}</td>
+                                    <td><span class="badge bg-light text-dark border">{{ r.department or 'N/A' }}</span></td>
+                                    <td>{{ r.salary | inr if r.salary else 'N/A' }}</td>
+                                    <td class="text-end pe-4">
+                                        <div class="d-inline-flex gap-1">
+                                            <a class="btn btn-sm btn-primary" href="{{ url_for('view_employee', emp_id=r.id) }}"><i class="bi bi-eye me-1"></i>View</a>
+                                            <a class="btn btn-sm btn-secondary" href="{{ url_for('edit_employee', emp_id=r.id) }}"><i class="bi bi-pencil me-1"></i>Edit</a>
+                                            <form method="post" action="{{ url_for('delete_employee', emp_id=r.id) }}" style="display:inline-block;" onsubmit="return confirm('Are you sure you want to permanently delete employee {{ r.name }} and all associated user records? This action cannot be undone.');">
+                                                <button class="btn btn-sm btn-danger" type="submit"><i class="bi bi-trash me-1"></i>Delete</button>
+                                            </form>
+                                        </div>
+                                    </td>
+                                </tr>
+                            {% else %}
+                                <tr>
+                                    <td colspan="4" class="text-center text-muted py-4">No employees found.</td>
+                                </tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>
-            <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-        </body>
-        </html>
+        </div>
+        {% endblock %}
         """,
         rows=rows,
     )
@@ -5890,76 +5888,86 @@ def add_employee():
         return redirect(url_for("admin_employees"))
     return render_template_string(
         """
-        <!doctype html>
-        <html lang="en">
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Add Employee</title>
-            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-        </head>
-        <body class="bg-light">
-            <div class="container py-5">
-                <div class="card shadow-sm mx-auto" style="max-width: 800px;">
-                    <div class="card-body">
-                        <div class="d-flex align-items-center mb-3">
-                            <a class="btn btn-outline-secondary me-3" href="{{ url_for('admin_employees') }}">Back</a>
-                            <h1 class="h3 mb-0">Add Employee</h1>
-                        </div>
-                        <form method="post" enctype="multipart/form-data">
-                            <div class="mb-3">
-                                <label class="form-label">Name</label>
-                                <input class="form-control" name="name" required>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Address</label>
-                                <textarea class="form-control" name="address"></textarea>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Education</label>
-                                <input class="form-control" name="education">
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Experience</label>
-                                <input class="form-control" name="experience">
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Contact Number</label>
-                                <input class="form-control" name="contact_number">
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Emergency Contact Number</label>
-                                <input class="form-control" name="emergency_contact">
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Department</label><br>
-                                <label class="form-check form-check-inline"><input class="form-check-input" type="checkbox" name="department" value="Google"> Google</label>
-                                <label class="form-check form-check-inline"><input class="form-check-input" type="checkbox" name="department" value="Social"> Social</label>
-                                <label class="form-check form-check-inline"><input class="form-check-input" type="checkbox" name="department" value="Website"> Website</label>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Salary</label>
-                                <input class="form-control" name="salary" type="number" step="0.01">
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">PAN Card (upload)</label>
-                                <input class="form-control" type="file" name="pan">
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Aadhaar Card (upload)</label>
-                                <input class="form-control" type="file" name="aadhaar">
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Other Documents (upload)</label>
-                                <input class="form-control" type="file" name="other">
-                            </div>
-                            <button class="btn btn-primary" type="submit">Add Employee</button>
-                        </form>
-                    </div>
+        {% extends "base.html" %}
+        {% block title %}Add Employee{% endblock %}
+        {% block page_content %}
+        <div class="container-fluid py-4">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+                <div>
+                    <h1 class="h3 mb-1"><i class="bi bi-person-plus me-2 text-primary"></i>Add Employee</h1>
+                    <p class="text-muted mb-0">Add a new employee profile to the system.</p>
+                </div>
+                <div>
+                    <a class="btn btn-outline-secondary" href="{{ url_for('admin_employees') }}"><i class="bi bi-arrow-left me-1"></i>Back to Employees</a>
                 </div>
             </div>
-        </body>
-        </html>
+
+            <div class="card shadow-sm border-0 mx-auto" style="max-width: 800px;">
+                <div class="card-body p-4">
+                    <form method="post" enctype="multipart/form-data">
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Name <span class="text-danger">*</span></label>
+                            <input class="form-control" name="name" required placeholder="Full Name">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Address</label>
+                            <textarea class="form-control" name="address" rows="3" placeholder="Full residential address"></textarea>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Education</label>
+                                <input class="form-control" name="education" placeholder="Highest qualification">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Experience</label>
+                                <input class="form-control" name="experience" placeholder="Years or summary of experience">
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Contact Number</label>
+                                <input class="form-control" name="contact_number" placeholder="Phone number">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Emergency Contact Number</label>
+                                <input class="form-control" name="emergency_contact" placeholder="Emergency contact">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold d-block">Department</label>
+                            <div class="d-flex flex-wrap gap-3">
+                                <label class="form-check form-check-inline mb-0"><input class="form-check-input" type="checkbox" name="department" value="Google"> Google</label>
+                                <label class="form-check form-check-inline mb-0"><input class="form-check-input" type="checkbox" name="department" value="Social"> Social</label>
+                                <label class="form-check form-check-inline mb-0"><input class="form-check-input" type="checkbox" name="department" value="Website"> Website</label>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Base Salary (INR)</label>
+                            <input class="form-control" name="salary" type="number" step="0.01" placeholder="e.g. 50000">
+                        </div>
+                        <hr class="my-4">
+                        <h5 class="fw-bold mb-3"><i class="bi bi-file-earmark-arrow-up me-2 text-primary"></i>Employee Documents</h5>
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">PAN Card (upload)</label>
+                            <input class="form-control" type="file" name="pan">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Aadhaar Card (upload)</label>
+                            <input class="form-control" type="file" name="aadhaar">
+                        </div>
+                        <div class="mb-4">
+                            <label class="form-label fw-semibold">Other Documents (upload)</label>
+                            <input class="form-control" type="file" name="other">
+                        </div>
+                        <div class="d-flex justify-content-end gap-2">
+                            <a class="btn btn-outline-secondary" href="{{ url_for('admin_employees') }}">Cancel</a>
+                            <button class="btn btn-primary" type="submit"><i class="bi bi-plus-lg me-1"></i>Add Employee</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endblock %}
         """,
     )
 
@@ -5990,175 +5998,205 @@ def view_employee(emp_id):
 
     return render_template_string(
         """
-            <!doctype html>
-            <html lang="en">
-            <head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1">
-                <title>View Employee - {{ r.name }}</title>
-                <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-                <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
-            </head>
-            <body class="bg-light">
-                <div class="container py-5">
-                    {% with messages = get_flashed_messages(with_categories=true) %}
-                        {% if messages %}
-                            {% for category, message in messages %}
-                                <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
-                                    {{ message }}
-                                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                                </div>
-                            {% endfor %}
-                        {% endif %}
-                    {% endwith %}
+        {% extends "base.html" %}
+        {% block title %}View Employee - {{ r.name }}{% endblock %}
+        {% block page_content %}
+        <div class="container-fluid py-4">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
 
-                    <div class="card shadow-sm mx-auto mb-4" style="max-width: 800px;">
-                        <div class="card-body">
-                            <div class="d-flex align-items-center mb-3">
-                                <a class="btn btn-outline-secondary me-3" href="{{ url_for('admin_employees') }}">Back</a>
-                                <h1 class="h3 mb-0">{{ r.name }}</h1>
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+                <div>
+                    <h1 class="h3 mb-1"><i class="bi bi-person-badge me-2 text-primary"></i>{{ r.name }}</h1>
+                    <p class="text-muted mb-0">Employee details, documents, payroll overview, and performance metrics.</p>
+                </div>
+                <div class="d-flex gap-2">
+                    <a class="btn btn-outline-secondary" href="{{ url_for('admin_employees') }}"><i class="bi bi-arrow-left me-1"></i>Back to Employees</a>
+                    <a class="btn btn-primary" href="{{ url_for('edit_employee', emp_id=r.id) }}"><i class="bi bi-pencil me-1"></i>Edit Profile</a>
+                </div>
+            </div>
+
+            <!-- Profile Details Card -->
+            <div class="card shadow-sm border-0 mb-4">
+                <div class="card-header bg-transparent py-3 border-bottom">
+                    <h5 class="mb-0 fw-bold"><i class="bi bi-info-circle me-2 text-primary"></i>Personal Information</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6"><p class="mb-1 text-muted small">Department</p><p class="fw-semibold mb-0"><span class="badge bg-light text-dark border">{{ r.department or 'N/A' }}</span></p></div>
+                        <div class="col-md-6"><p class="mb-1 text-muted small">Base Salary</p><p class="fw-semibold mb-0">{{ r.salary | inr if r.salary else 'N/A' }}</p></div>
+                        <div class="col-md-6"><p class="mb-1 text-muted small">Education</p><p class="fw-semibold mb-0">{{ r.education or 'N/A' }}</p></div>
+                        <div class="col-md-6"><p class="mb-1 text-muted small">Experience</p><p class="fw-semibold mb-0">{{ r.experience or 'N/A' }}</p></div>
+                        <div class="col-md-6"><p class="mb-1 text-muted small">Contact Number</p><p class="fw-semibold mb-0">{{ r.contact_number or 'N/A' }}</p></div>
+                        <div class="col-md-6"><p class="mb-1 text-muted small">Emergency Contact</p><p class="fw-semibold mb-0">{{ r.emergency_contact or 'N/A' }}</p></div>
+                        <div class="col-12"><p class="mb-1 text-muted small">Address</p><p class="fw-semibold mb-0">{{ r.address or 'N/A' }}</p></div>
+                    </div>
+
+                    <hr class="my-4">
+
+                    <h6 class="fw-bold mb-3"><i class="bi bi-file-earmark-text me-2 text-primary"></i>Uploaded Documents</h6>
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <div class="p-3 border rounded text-center">
+                                <i class="bi bi-card-text fs-3 text-primary d-block mb-1"></i>
+                                <span class="text-muted small d-block mb-2">PAN Card</span>
+                                {% if r.pan_path %}<a class="btn btn-sm btn-outline-primary" href="/{{ r.pan_path }}"><i class="bi bi-download me-1"></i>Download</a>{% else %}<span class="badge bg-light text-muted border">Not Uploaded</span>{% endif %}
                             </div>
-                            <p><strong>Department:</strong> {{ r.department or 'N/A' }}</p>
-                            <p><strong>Address:</strong><br>{{ r.address or 'N/A' }}</p>
-                            <p><strong>Education:</strong> {{ r.education or 'N/A' }}</p>
-                            <p><strong>Experience:</strong> {{ r.experience or 'N/A' }}</p>
-                            <p><strong>Contact Number:</strong> {{ r.contact_number or '' }}</p>
-                            <p><strong>Emergency Contact:</strong> {{ r.emergency_contact or 'N/A' }}</p>
-                            <p><strong>Base Salary:</strong> {{ r.salary | inr if r.salary else 'N/A' }}</p>
-                            <p><strong>PAN:</strong> {% if r.pan_path %}<a href="/{{ r.pan_path }}">Download</a>{% else %}N/A{% endif %}</p>
-                            <p><strong>Aadhaar:</strong> {% if r.aadhaar_path %}<a href="/{{ r.aadhaar_path }}">Download</a>{% else %}N/A{% endif %}</p>
-                            <p><strong>Other Docs:</strong> {% if r.other_docs_path %}<a href="/{{ r.other_docs_path }}">Download</a>{% else %}N/A{% endif %}</p>
-                            
-                            <hr class="my-4">
-
-                            <!-- Payroll Section -->
-                            {% if payroll %}
-                            <div class="p-3 bg-light rounded border mb-4">
-                                <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
-                                    <h5 class="mb-0 fw-bold text-dark"><i class="bi bi-wallet2 me-2 text-success"></i>Payroll Section</h5>
-                                    <span class="badge bg-success px-3 py-1 fs-6">{{ payroll.payroll_month }}</span>
-                                </div>
-                                <div class="row g-3 mb-3">
-                                    <div class="col-md-4">
-                                        <div class="p-3 bg-white rounded border text-center h-100">
-                                            <span class="text-muted small d-block mb-1">Current Base Salary</span>
-                                            <strong class="fs-5 text-dark">{{ payroll.base_salary | inr }}</strong>
-                                            {% if current_user.role == 'admin' %}
-                                                <form method="POST" action="{{ url_for('update_employee_base_salary', emp_id=r.id) }}" class="mt-2 d-flex gap-1 justify-content-center">
-                                                    <input type="number" step="0.01" name="salary" class="form-control form-control-sm" style="max-width: 110px;" value="{{ payroll.base_salary }}" required>
-                                                    <button type="submit" class="btn btn-sm btn-outline-primary" title="Update Base Salary"><i class="bi bi-check-lg"></i></button>
-                                                </form>
-                                            {% endif %}
-                                        </div>
-                                    </div>
-                                    <div class="col-md-4">
-                                        <div class="p-3 bg-white rounded border text-center h-100">
-                                            <span class="text-muted small d-block mb-1">Current Month Final Salary</span>
-                                            <strong class="fs-4 text-success">{{ payroll.final_salary | inr }}</strong>
-                                            {% if payroll.leave_deduction > 0 %}
-                                                <div class="text-danger small mt-1">(Deduction: -{{ payroll.leave_deduction | inr }})</div>
-                                            {% else %}
-                                                <div class="text-muted small mt-1">(No Deductions)</div>
-                                            {% endif %}
-                                        </div>
-                                    </div>
-                                    <div class="col-md-4">
-                                        <div class="p-3 bg-white rounded border text-center h-100">
-                                            <span class="text-muted small d-block mb-1">Payroll Details</span>
-                                            <div class="text-dark fw-semibold small mb-1">Working Days: {{ payroll.working_days }}</div>
-                                            <div class="text-muted small">Status: <span class="badge bg-info text-dark">{{ payroll.payroll_status }}</span></div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="row g-2">
-                                    <div class="col-4 col-md-4">
-                                        <div class="p-2 bg-white rounded border text-center">
-                                            <span class="text-muted small d-block">Attendance %</span>
-                                            <strong class="text-success">{{ payroll.attendance_pct }}%</strong>
-                                        </div>
-                                    </div>
-                                    <div class="col-4 col-md-4">
-                                        <div class="p-2 bg-white rounded border text-center">
-                                            <span class="text-muted small d-block">Approved Leave Days</span>
-                                            <strong class="text-info">{{ payroll.approved_leave_days }}</strong>
-                                        </div>
-                                    </div>
-                                    <div class="col-4 col-md-4">
-                                        <div class="p-2 bg-white rounded border text-center">
-                                            <span class="text-muted small d-block">Performance %</span>
-                                            <strong class="text-primary">{{ payroll.performance_score }}%</strong>
-                                        </div>
-                                    </div>
-                                </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="p-3 border rounded text-center">
+                                <i class="bi bi-person-bounding-box fs-3 text-info d-block mb-1"></i>
+                                <span class="text-muted small d-block mb-2">Aadhaar Card</span>
+                                {% if r.aadhaar_path %}<a class="btn btn-sm btn-outline-primary" href="/{{ r.aadhaar_path }}"><i class="bi bi-download me-1"></i>Download</a>{% else %}<span class="badge bg-light text-muted border">Not Uploaded</span>{% endif %}
                             </div>
-                            {% endif %}
+                        </div>
+                        <div class="col-md-4">
+                            <div class="p-3 border rounded text-center">
+                                <i class="bi bi-folder2-open fs-3 text-secondary d-block mb-1"></i>
+                                <span class="text-muted small d-block mb-2">Other Documents</span>
+                                {% if r.other_docs_path %}<a class="btn btn-sm btn-outline-primary" href="/{{ r.other_docs_path }}"><i class="bi bi-download me-1"></i>Download</a>{% else %}<span class="badge bg-light text-muted border">Not Uploaded</span>{% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
-                            <!-- Performance Section -->
-                            <div class="p-3 bg-light rounded border">
-                                <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
-                                    <h5 class="mb-0 fw-bold text-dark"><i class="bi bi-graph-up-arrow me-2 text-primary"></i>Performance Section</h5>
-                                    <span class="badge {{ perf.badge_class }} fs-6 px-3 py-1">{{ perf.performance_label }}</span>
-                                </div>
-                                <div class="row align-items-center g-3 mb-3">
-                                    <div class="col-md-4 text-center border-end">
-                                        <div class="text-muted small fw-semibold">Performance Score</div>
-                                        <div class="display-6 fw-bold text-primary my-1">{{ perf.performance_score }}%</div>
-                                        <div class="progress mb-2" style="height: 10px;">
-                                            <div class="progress-bar {{ perf.bar_class }}" role="progressbar" style="width: {{ perf.performance_score }}%;" aria-valuenow="{{ perf.performance_score }}" aria-valuemin="0" aria-valuemax="100"></div>
-                                        </div>
-                                        <div class="text-muted small" style="font-size: 0.75rem;">
-                                            <i class="bi bi-clock me-1"></i>Last Updated: {{ perf.last_updated }}
-                                        </div>
+            <!-- Payroll Section -->
+            {% if payroll %}
+            <div class="card shadow-sm border-0 mb-4">
+                <div class="card-header bg-transparent py-3 border-bottom d-flex flex-wrap justify-content-between align-items-center gap-2">
+                    <h5 class="mb-0 fw-bold"><i class="bi bi-wallet2 me-2 text-success"></i>Payroll Section</h5>
+                    <span class="badge bg-success px-3 py-1 fs-6">{{ payroll.payroll_month }}</span>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-4">
+                            <div class="p-3 border rounded text-center h-100">
+                                <span class="text-muted small d-block mb-1">Current Base Salary</span>
+                                <strong class="fs-5">{{ payroll.base_salary | inr }}</strong>
+                                {% if current_user.role == 'admin' %}
+                                    <form method="POST" action="{{ url_for('update_employee_base_salary', emp_id=r.id) }}" class="mt-2 d-flex gap-1 justify-content-center">
+                                        <input type="number" step="0.01" name="salary" class="form-control form-control-sm" style="max-width: 110px;" value="{{ payroll.base_salary }}" required>
+                                        <button type="submit" class="btn btn-sm btn-outline-primary" title="Update Base Salary"><i class="bi bi-check-lg"></i></button>
+                                    </form>
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="p-3 border rounded text-center h-100">
+                                <span class="text-muted small d-block mb-1">Current Month Final Salary</span>
+                                <strong class="fs-4 text-success">{{ payroll.final_salary | inr }}</strong>
+                                {% if payroll.leave_deduction > 0 %}
+                                    <div class="text-danger small mt-1">(Deduction: -{{ payroll.leave_deduction | inr }})</div>
+                                {% else %}
+                                    <div class="text-muted small mt-1">(No Deductions)</div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="p-3 border rounded text-center h-100">
+                                <span class="text-muted small d-block mb-1">Payroll Details</span>
+                                <div class="fw-semibold small mb-1">Working Days: {{ payroll.working_days }}</div>
+                                <div class="text-muted small">Status: <span class="badge bg-info text-dark">{{ payroll.payroll_status }}</span></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row g-2">
+                        <div class="col-4 col-md-4">
+                            <div class="p-2 border rounded text-center">
+                                <span class="text-muted small d-block">Attendance %</span>
+                                <strong class="text-success">{{ payroll.attendance_pct }}%</strong>
+                            </div>
+                        </div>
+                        <div class="col-4 col-md-4">
+                            <div class="p-2 border rounded text-center">
+                                <span class="text-muted small d-block">Approved Leave Days</span>
+                                <strong class="text-info">{{ payroll.approved_leave_days }}</strong>
+                            </div>
+                        </div>
+                        <div class="col-4 col-md-4">
+                            <div class="p-2 border rounded text-center">
+                                <span class="text-muted small d-block">Performance %</span>
+                                <strong class="text-primary">{{ payroll.performance_score }}%</strong>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Performance Section -->
+            <div class="card shadow-sm border-0 mb-4">
+                <div class="card-header bg-transparent py-3 border-bottom d-flex flex-wrap justify-content-between align-items-center gap-2">
+                    <h5 class="mb-0 fw-bold"><i class="bi bi-graph-up-arrow me-2 text-primary"></i>Performance Section</h5>
+                    <span class="badge {{ perf.badge_class }} fs-6 px-3 py-1">{{ perf.performance_label }}</span>
+                </div>
+                <div class="card-body">
+                    <div class="row align-items-center g-3 mb-3">
+                        <div class="col-md-4 text-center border-end">
+                            <div class="text-muted small fw-semibold">Performance Score</div>
+                            <div class="display-6 fw-bold text-primary my-1">{{ perf.performance_score }}%</div>
+                            <div class="progress mb-2" style="height: 10px;">
+                                <div class="progress-bar {{ perf.bar_class }}" role="progressbar" style="width: {{ perf.performance_score }}%;" aria-valuenow="{{ perf.performance_score }}" aria-valuemin="0" aria-valuemax="100"></div>
+                            </div>
+                            <div class="text-muted small" style="font-size: 0.75rem;">
+                                <i class="bi bi-clock me-1"></i>Last Updated: {{ perf.last_updated }}
+                            </div>
+                        </div>
+                        <div class="col-md-8">
+                            <div class="row g-2">
+                                <div class="col-6">
+                                    <div class="p-2 border rounded text-center">
+                                        <span class="text-muted small d-block">Attendance %</span>
+                                        <strong class="text-success">{{ perf.attendance_pct }}%</strong>
                                     </div>
-                                    <div class="col-md-8">
-                                        <div class="row g-2">
-                                            <div class="col-6">
-                                                <div class="p-2 bg-white rounded border text-center">
-                                                    <span class="text-muted small d-block">Attendance %</span>
-                                                    <strong class="text-success">{{ perf.attendance_pct }}%</strong>
-                                                </div>
-                                            </div>
-                                            <div class="col-6">
-                                                <div class="p-2 bg-white rounded border text-center">
-                                                    <span class="text-muted small d-block">Task Completion %</span>
-                                                    <strong class="text-primary">{{ perf.task_completion_pct }}%</strong>
-                                                </div>
-                                            </div>
-                                            <div class="col-6">
-                                                <div class="p-2 bg-white rounded border text-center">
-                                                    <span class="text-muted small d-block">Approved Leaves</span>
-                                                    <strong class="text-info">{{ perf.approved_leaves }}</strong>
-                                                </div>
-                                            </div>
-                                            <div class="col-6">
-                                                <div class="p-2 bg-white rounded border text-center">
-                                                    <span class="text-muted small d-block">Overdue Tasks</span>
-                                                    <strong class="{% if perf.overdue_tasks > 0 %}text-danger{% else %}text-secondary{% endif %}">{{ perf.overdue_tasks }}</strong>
-                                                </div>
-                                            </div>
-                                            <div class="col-6">
-                                                <div class="p-2 bg-white rounded border text-center">
-                                                    <span class="text-muted small d-block">Completed Tasks</span>
-                                                    <strong class="text-success">{{ perf.completed_tasks }}</strong>
-                                                </div>
-                                            </div>
-                                            <div class="col-6">
-                                                <div class="p-2 bg-white rounded border text-center">
-                                                    <span class="text-muted small d-block">Pending Tasks</span>
-                                                    <strong class="text-warning text-dark">{{ perf.pending_tasks }}</strong>
-                                                </div>
-                                            </div>
-                                        </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="p-2 border rounded text-center">
+                                        <span class="text-muted small d-block">Task Completion %</span>
+                                        <strong class="text-primary">{{ perf.task_completion_pct }}%</strong>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="p-2 border rounded text-center">
+                                        <span class="text-muted small d-block">Approved Leaves</span>
+                                        <strong class="text-info">{{ perf.approved_leaves }}</strong>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="p-2 border rounded text-center">
+                                        <span class="text-muted small d-block">Overdue Tasks</span>
+                                        <strong class="{% if perf.overdue_tasks > 0 %}text-danger{% else %}text-secondary{% endif %}">{{ perf.overdue_tasks }}</strong>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="p-2 border rounded text-center">
+                                        <span class="text-muted small d-block">Completed Tasks</span>
+                                        <strong class="text-success">{{ perf.completed_tasks }}</strong>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="p-2 border rounded text-center">
+                                        <span class="text-muted small d-block">Pending Tasks</span>
+                                        <strong class="text-warning">{{ perf.pending_tasks }}</strong>
                                     </div>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
-                <script href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-            </body>
-            </html>
-            """,
+            </div>
+        </div>
+        {% endblock %}
+        """,
         r=r,
         perf=perf,
         payroll=payroll,
@@ -6270,78 +6308,90 @@ def edit_employee(emp_id):
     current_depts = (r["department"] or "").split(",") if r["department"] else []
     return render_template_string(
         """
-            <!doctype html>
-            <html lang="en">
-            <head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1">
-                <title>Edit Employee</title>
-                <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-            </head>
-            <body class="bg-light">
-                <div class="container py-5">
-                    <div class="card shadow-sm mx-auto" style="max-width: 800px;">
-                        <div class="card-body">
-                            <div class="d-flex align-items-center mb-3">
-                                <a class="btn btn-outline-secondary me-3" href="{{ url_for('admin_employees') }}">Back</a>
-                                <h1 class="h3 mb-0">Edit Employee</h1>
-                            </div>
-                            <form method="post" enctype="multipart/form-data">
-                                <div class="mb-3">
-                                    <label class="form-label">Name</label>
-                                    <input class="form-control" name="name" value="{{ r.name }}" required>
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">Address</label>
-                                    <textarea class="form-control" name="address">{{ r.address }}</textarea>
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">Education</label>
-                                    <input class="form-control" name="education" value="{{ r.education }}">
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">Experience</label>
-                                    <input class="form-control" name="experience" value="{{ r.experience }}">
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">Contact Number</label>
-                                    <input class="form-control" name="contact_number" value="{{ r.contact_number or '' }}">
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">Emergency Contact Number</label>
-                                    <input class="form-control" name="emergency_contact" value="{{ r.emergency_contact }}">
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">Department</label><br>
-                                    {% for dep in ['Google','Social','Website'] %}
-                                        <label class="form-check form-check-inline"><input class="form-check-input" type="checkbox" name="department" value="{{ dep }}" {% if dep in current_depts %}checked{% endif %}> {{ dep }}</label>
-                                    {% endfor %}
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">Salary</label>
-                                    <input class="form-control" name="salary" type="number" step="0.01" value="{{ r.salary }}">
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">PAN Card (upload)</label>
-                                    <input class="form-control" type="file" name="pan">
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">Aadhaar Card (upload)</label>
-                                    <input class="form-control" type="file" name="aadhaar">
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">Other Documents (upload)</label>
-                                    <input class="form-control" type="file" name="other">
-                                </div>
-                                <button class="btn btn-primary" type="submit">Save</button>
-                                <a class="btn btn-outline-secondary ms-2" href="{{ url_for('view_employee', emp_id=r.id) }}">Cancel</a>
-                            </form>
-                        </div>
-                    </div>
+        {% extends "base.html" %}
+        {% block title %}Edit Employee - {{ r.name }}{% endblock %}
+        {% block page_content %}
+        <div class="container-fluid py-4">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+                <div>
+                    <h1 class="h3 mb-1"><i class="bi bi-pencil-square me-2 text-primary"></i>Edit Employee</h1>
+                    <p class="text-muted mb-0">Update employee records and uploaded documents for {{ r.name }}.</p>
                 </div>
-            </body>
-            </html>
-            """,
+                <div>
+                    <a class="btn btn-outline-secondary" href="{{ url_for('view_employee', emp_id=r.id) }}"><i class="bi bi-arrow-left me-1"></i>Back to View Profile</a>
+                </div>
+            </div>
+
+            <div class="card shadow-sm border-0 mx-auto" style="max-width: 800px;">
+                <div class="card-body p-4">
+                    <form method="post" enctype="multipart/form-data">
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Name <span class="text-danger">*</span></label>
+                            <input class="form-control" name="name" value="{{ r.name }}" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Address</label>
+                            <textarea class="form-control" name="address" rows="3">{{ r.address or '' }}</textarea>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Education</label>
+                                <input class="form-control" name="education" value="{{ r.education or '' }}">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Experience</label>
+                                <input class="form-control" name="experience" value="{{ r.experience or '' }}">
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Contact Number</label>
+                                <input class="form-control" name="contact_number" value="{{ r.contact_number or '' }}">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Emergency Contact Number</label>
+                                <input class="form-control" name="emergency_contact" value="{{ r.emergency_contact or '' }}">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold d-block">Department</label>
+                            <div class="d-flex flex-wrap gap-3">
+                                {% for dep in ['Google','Social','Website'] %}
+                                    <label class="form-check form-check-inline mb-0"><input class="form-check-input" type="checkbox" name="department" value="{{ dep }}" {% if dep in current_depts %}checked{% endif %}> {{ dep }}</label>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Salary (INR)</label>
+                            <input class="form-control" name="salary" type="number" step="0.01" value="{{ r.salary or '' }}">
+                        </div>
+                        <hr class="my-4">
+                        <h5 class="fw-bold mb-3"><i class="bi bi-file-earmark-arrow-up me-2 text-primary"></i>Employee Documents</h5>
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">PAN Card (upload)</label>
+                            <input class="form-control" type="file" name="pan">
+                            {% if r.pan_path %}<div class="form-text text-muted">Current file: {{ r.pan_path }}</div>{% endif %}
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Aadhaar Card (upload)</label>
+                            <input class="form-control" type="file" name="aadhaar">
+                            {% if r.aadhaar_path %}<div class="form-text text-muted">Current file: {{ r.aadhaar_path }}</div>{% endif %}
+                        </div>
+                        <div class="mb-4">
+                            <label class="form-label fw-semibold">Other Documents (upload)</label>
+                            <input class="form-control" type="file" name="other">
+                            {% if r.other_docs_path %}<div class="form-text text-muted">Current file: {{ r.other_docs_path }}</div>{% endif %}
+                        </div>
+                        <div class="d-flex justify-content-end gap-2">
+                            <a class="btn btn-outline-secondary" href="{{ url_for('view_employee', emp_id=r.id) }}">Cancel</a>
+                            <button class="btn btn-primary" type="submit"><i class="bi bi-check-lg me-1"></i>Save Changes</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endblock %}
+        """,
         r=r,
         current_depts=current_depts,
     )
