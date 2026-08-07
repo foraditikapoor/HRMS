@@ -29,7 +29,9 @@
     <div class="app-shell">
         <aside class="app-sidebar" id="appSidebar" aria-label="Primary navigation">
             <a class="brand" href="{{ url_for('dashboard') }}">
-                <img src="{{ url_for('static', filename='images/bizznex-logo.png') }}" alt="Bizznex Logo" class="brand-logo">
+                <div class="brand-logo-container">
+                    <img src="{{ url_for('static', filename='images/bizznex-logo.png') }}" alt="Bizznex Logo" class="brand-logo">
+                </div>
                 <span class="brand-name">Bizznex</span>
             </a>
 
