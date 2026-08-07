@@ -752,12 +752,175 @@ def ensure_employee_table():
             conn.execute("ALTER TABLE employees ADD COLUMN contact_number TEXT")
         if "paid_leave_entitlement" not in columns:
             conn.execute("ALTER TABLE employees ADD COLUMN paid_leave_entitlement REAL DEFAULT 12.0")
+        if "date_of_joining" not in columns:
+            conn.execute("ALTER TABLE employees ADD COLUMN date_of_joining TEXT")
+        if "date_of_birth" not in columns:
+            conn.execute("ALTER TABLE employees ADD COLUMN date_of_birth TEXT")
         # Existing employee records have no linked user and remain untouched.
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_user_id "
             "ON employees(user_id) WHERE user_id IS NOT NULL"
         )
         conn.commit()
+
+
+def calculate_permanent_date(joining_date_str):
+    """Calculates the exact 6-month calendar permanent date for a given joining date (YYYY-MM-DD)."""
+    if not joining_date_str:
+        return None
+    try:
+        parts = [int(p) for p in joining_date_str.strip().split("-")]
+        if len(parts) != 3:
+            return None
+        year, month, day = parts
+        target_month = month + 6
+        target_year = year + (target_month - 1) // 12
+        target_month = (target_month - 1) % 12 + 1
+
+        max_day = calendar.monthrange(target_year, target_month)[1]
+        target_day = min(day, max_day)
+
+        return datetime.date(target_year, target_month, target_day).isoformat()
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def compute_employee_role(date_of_joining_str, current_role=None):
+    """Computes whether an employee is 'temporary employee' or 'permanent employee' based on date_of_joining.
+
+    Admin and HR roles are never altered.
+    """
+    norm_role = (current_role or "").lower().strip()
+    if norm_role in ("admin", "hr"):
+        return norm_role
+
+    if not date_of_joining_str:
+        return "temporary employee"
+
+    perm_date_str = calculate_permanent_date(date_of_joining_str)
+    if not perm_date_str:
+        return "temporary employee"
+
+    today_str = datetime.datetime.now(IST).date().isoformat()
+    if today_str >= perm_date_str:
+        return "permanent employee"
+    else:
+        return "temporary employee"
+
+
+def get_birthday_date_for_year(dob_str, year):
+    """Returns the birthday date string (YYYY-MM-DD) in the given year for a DOB (YYYY-MM-DD).
+
+    Handles Feb 29 birthdays in non-leap years deterministically by placing them on Feb 28.
+    """
+    if not dob_str:
+        return None
+    try:
+        parts = [int(p) for p in dob_str.strip().split("-")]
+        if len(parts) != 3:
+            return None
+        _, month, day = parts
+        try:
+            return datetime.date(year, month, day).isoformat()
+        except ValueError:
+            if month == 2 and day == 29:
+                return datetime.date(year, 2, 28).isoformat()
+            return None
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def ensure_birthday_paid_leaves(conn=None):
+    """Automatically generates ONE Birthday Paid Leave entry for each employee who has a Date of Birth for the current year.
+
+    Idempotent: Checked against existing leave_requests to prevent duplicate creation.
+    """
+    close_conn = False
+    if conn is None:
+        conn = get_db()
+        close_conn = True
+
+    try:
+        current_year = datetime.datetime.now(IST).year
+        employees = conn.execute(
+            "SELECT e.id, e.user_id, e.name, e.date_of_birth FROM employees e WHERE e.user_id IS NOT NULL AND e.date_of_birth IS NOT NULL AND e.date_of_birth != ''"
+        ).fetchall()
+
+        for emp in employees:
+            user_id = emp["user_id"]
+            name = emp["name"] or "Employee"
+            dob_str = emp["date_of_birth"]
+
+            bday_date_str = get_birthday_date_for_year(dob_str, current_year)
+            if not bday_date_str:
+                continue
+
+            existing = conn.execute(
+                """
+                SELECT id FROM leave_requests
+                WHERE user_id = ?
+                  AND LOWER(leave_type) = 'birthday leave'
+                  AND strftime('%Y', start_date) = ?
+                """,
+                (user_id, str(current_year)),
+            ).fetchone()
+
+            if not existing:
+                conn.execute(
+                    """
+                    INSERT INTO leave_requests (
+                        user_id, employee_name, leave_type, start_date, end_date,
+                        total_days, reason, status, applied_date, approved_by, approval_date
+                    )
+                    VALUES (?, ?, 'Birthday Leave', ?, ?, 1.0, 'Birthday Paid Leave', 'Approved', ?, 'System Policy', ?)
+                    """,
+                    (
+                        user_id,
+                        name,
+                        bday_date_str,
+                        bday_date_str,
+                        bday_date_str,
+                        bday_date_str,
+                    ),
+                )
+        conn.commit()
+    finally:
+        if close_conn:
+            conn.close()
+
+
+def sync_all_employee_roles(conn=None):
+    """Synchronizes user roles for all employees in the database based on Date of Joining and 6-month threshold."""
+    close_conn = False
+    if conn is None:
+        conn = get_db()
+        close_conn = True
+
+    try:
+        conn.execute(
+            "UPDATE users SET role = 'temporary employee' WHERE LOWER(role) IN ('user', 'employee')"
+        )
+
+        employees = conn.execute(
+            "SELECT e.id, e.user_id, e.date_of_joining, u.role FROM employees e JOIN users u ON e.user_id = u.id"
+        ).fetchall()
+
+        for emp in employees:
+            user_id = emp["user_id"]
+            current_role = emp["role"]
+            doj = emp["date_of_joining"]
+            new_role = compute_employee_role(doj, current_role)
+            if new_role != current_role:
+                conn.execute(
+                    "UPDATE users SET role = ? WHERE id = ?",
+                    (new_role, user_id),
+                )
+        conn.commit()
+
+        ensure_birthday_paid_leaves(conn)
+    finally:
+        if close_conn:
+            conn.close()
 
 
 def ensure_projects_table():
@@ -1015,7 +1178,7 @@ def get_user_paid_leave_balance(conn, user_id):
             FROM leave_requests
             WHERE user_id = ?
               AND status = 'Approved'
-              AND LOWER(leave_type) != 'unpaid leave'
+              AND LOWER(leave_type) NOT IN ('unpaid leave', 'birthday leave')
             """,
             (user_id,),
         ).fetchone()
@@ -1694,6 +1857,7 @@ def init_db():
         ensure_notifications_table()
         ensure_settings_tables()
         ensure_payroll_table()
+        sync_all_employee_roles(conn)
 
         admin_exists = conn.execute(
             "SELECT COUNT(*) FROM users WHERE username = ?",
@@ -4338,7 +4502,7 @@ def create_user():
 
         if not full_name or not email or not username or not role:
             message = "All fields are required."
-        elif role not in {"employee", "user", "admin", "hr"}:
+        elif role not in {"temporary employee", "permanent employee", "employee", "user", "admin", "hr"}:
             message = "Invalid role selected."
         else:
             with get_db() as conn:
@@ -4362,12 +4526,13 @@ def create_user():
                         ),
                     )
                     new_user_id = cursor.lastrowid
-                    if role == "employee":
+                    if role in ("temporary employee", "permanent employee", "employee", "user"):
                         conn.execute(
                             "INSERT INTO employees (user_id, name) VALUES (?, ?)",
                             (new_user_id, full_name),
                         )
                     conn.commit()
+                    sync_all_employee_roles(conn)
                     create_notification(
                         new_user_id,
                         "Welcome to HRMS",
@@ -4421,9 +4586,9 @@ def create_user():
                             <div class="mb-3">
                                 <label class="form-label">Role</label>
                                 <select class="form-select" name="role" required>
-                                    <option value="employee" selected>Employee</option>
+                                    <option value="temporary employee" selected>Temporary Employee</option>
+                                    <option value="permanent employee">Permanent Employee</option>
                                     <option value="hr">HR</option>
-                                    <option value="user">User</option>
                                     <option value="admin">Admin</option>
                                 </select>
                             </div>
@@ -5801,7 +5966,12 @@ def admin_employees():
         return redirect(url_for("dashboard"))
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT id, name, department, salary FROM employees ORDER BY name"
+            """
+            SELECT e.id, e.name, e.department, e.salary, e.date_of_joining, e.date_of_birth, u.role
+            FROM employees e
+            LEFT JOIN users u ON e.user_id = u.id
+            ORDER BY e.name
+            """
         ).fetchall()
     return render_template_string(
         """
@@ -5812,7 +5982,7 @@ def admin_employees():
             <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
                 <div>
                     <h1 class="h3 mb-1"><i class="bi bi-people me-2 text-primary"></i>Employee Management</h1>
-                    <p class="text-muted mb-0">Overview employee records, departments, base salaries, and profiles.</p>
+                    <p class="text-muted mb-0">Overview employee records, roles, joining dates, base salaries, and profiles.</p>
                 </div>
                 <div class="d-flex gap-2 flex-wrap">
                     <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}"><i class="bi bi-arrow-left me-1"></i>Dashboard</a>
@@ -5839,7 +6009,9 @@ def admin_employees():
                             <thead class="table-light">
                                 <tr>
                                     <th class="ps-4">Name</th>
+                                    <th>Role</th>
                                     <th>Department</th>
+                                    <th>Joining Date</th>
                                     <th>Salary</th>
                                     <th class="text-end pe-4">Actions</th>
                                 </tr>
@@ -5848,7 +6020,19 @@ def admin_employees():
                             {% for r in rows %}
                                 <tr>
                                     <td class="ps-4 fw-bold">{{ r.name }}</td>
+                                    <td>
+                                        {% if r.role == 'admin' %}
+                                            <span class="badge bg-primary">Admin</span>
+                                        {% elif r.role == 'hr' %}
+                                            <span class="badge bg-info text-dark">HR</span>
+                                        {% elif r.role in ('permanent employee', 'permanent') %}
+                                            <span class="badge bg-success">Permanent Employee</span>
+                                        {% else %}
+                                            <span class="badge bg-secondary">Temporary Employee</span>
+                                        {% endif %}
+                                    </td>
                                     <td><span class="badge bg-light text-dark border">{{ r.department or 'N/A' }}</span></td>
+                                    <td>{{ r.date_of_joining or 'N/A' }}</td>
                                     <td>{{ r.salary | inr if r.salary else 'N/A' }}</td>
                                     <td class="text-end pe-4">
                                         <div class="d-inline-flex gap-1">
@@ -5862,7 +6046,7 @@ def admin_employees():
                                 </tr>
                             {% else %}
                                 <tr>
-                                    <td colspan="4" class="text-center text-muted py-4">No employees found.</td>
+                                    <td colspan="6" class="text-center text-muted py-4">No employees found.</td>
                                 </tr>
                             {% endfor %}
                             </tbody>
@@ -5899,9 +6083,11 @@ def add_employee():
         pan_path = save_uploaded_file(pan_file)
         aadhaar_path = save_uploaded_file(aadhaar_file)
         other_path = save_uploaded_file(other_file)
+        date_of_joining = request.form.get("date_of_joining", "").strip() or None
+        date_of_birth = request.form.get("date_of_birth", "").strip() or None
         with get_db() as conn:
             conn.execute(
-                "INSERT INTO employees (name, address, education, experience, contact_number, emergency_contact, department, salary, pan_path, aadhaar_path, other_docs_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO employees (name, address, education, experience, contact_number, emergency_contact, department, salary, pan_path, aadhaar_path, other_docs_path, date_of_joining, date_of_birth) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     name,
                     address,
@@ -5914,9 +6100,12 @@ def add_employee():
                     pan_path,
                     aadhaar_path,
                     other_path,
+                    date_of_joining,
+                    date_of_birth,
                 ),
             )
             conn.commit()
+            sync_all_employee_roles(conn)
         flash("Employee added.", "success")
         return redirect(url_for("admin_employees"))
     return render_template_string(
@@ -5954,6 +6143,16 @@ def add_employee():
                             <div class="col-md-6">
                                 <label class="form-label fw-bold">Experience</label>
                                 <input class="form-control" name="experience" placeholder="Years or summary of experience">
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Date of Joining</label>
+                                <input class="form-control" type="date" name="date_of_joining">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Date of Birth</label>
+                                <input class="form-control" type="date" name="date_of_birth">
                             </div>
                         </div>
                         <div class="row g-3 mb-3">
@@ -6026,6 +6225,8 @@ def view_employee(emp_id):
             if u:
                 user_id = u["id"]
 
+        emp_user = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone() if user_id else None
+        emp_role = emp_user["role"] if emp_user else "temporary employee"
         perf = calculate_employee_performance(conn, user_id)
         payroll = calculate_employee_payroll(conn, emp_id)
 
@@ -6064,7 +6265,23 @@ def view_employee(emp_id):
                 </div>
                 <div class="card-body">
                     <div class="row g-3">
+                        <div class="col-md-6">
+                            <p class="mb-1 text-muted small">Employee Role</p>
+                            <p class="fw-semibold mb-0">
+                                {% if emp_role == 'admin' %}
+                                    <span class="badge bg-primary fs-6">Admin</span>
+                                {% elif emp_role == 'hr' %}
+                                    <span class="badge bg-info text-dark fs-6">HR</span>
+                                {% elif emp_role in ('permanent employee', 'permanent') %}
+                                    <span class="badge bg-success fs-6">Permanent Employee</span>
+                                {% else %}
+                                    <span class="badge bg-secondary fs-6">Temporary Employee</span>
+                                {% endif %}
+                            </p>
+                        </div>
                         <div class="col-md-6"><p class="mb-1 text-muted small">Department</p><p class="fw-semibold mb-0"><span class="badge bg-light text-dark border">{{ r.department or 'N/A' }}</span></p></div>
+                        <div class="col-md-6"><p class="mb-1 text-muted small">Date of Joining</p><p class="fw-semibold mb-0">{{ r.date_of_joining or 'N/A' }}</p></div>
+                        <div class="col-md-6"><p class="mb-1 text-muted small">Date of Birth</p><p class="fw-semibold mb-0">{{ r.date_of_birth or 'N/A' }}</p></div>
                         <div class="col-md-6"><p class="mb-1 text-muted small">Base Salary</p><p class="fw-semibold mb-0">{{ r.salary | inr if r.salary else 'N/A' }}</p></div>
                         <div class="col-md-6"><p class="mb-1 text-muted small">Education</p><p class="fw-semibold mb-0">{{ r.education or 'N/A' }}</p></div>
                         <div class="col-md-6"><p class="mb-1 text-muted small">Experience</p><p class="fw-semibold mb-0">{{ r.experience or 'N/A' }}</p></div>
@@ -6231,6 +6448,7 @@ def view_employee(emp_id):
         {% endblock %}
         """,
         r=r,
+        emp_role=emp_role,
         perf=perf,
         payroll=payroll,
     )
@@ -6302,6 +6520,8 @@ def edit_employee(emp_id):
         pan_path = r["pan_path"]
         aadhaar_path = r["aadhaar_path"]
         other_path = r["other_docs_path"]
+        date_of_joining = request.form.get("date_of_joining", "").strip() or None
+        date_of_birth = request.form.get("date_of_birth", "").strip() or None
         if pan_file and pan_file.filename:
             pan_path = save_uploaded_file(pan_file)
         if aadhaar_file and aadhaar_file.filename:
@@ -6311,7 +6531,7 @@ def edit_employee(emp_id):
         with get_db() as conn:
             conn.execute(
                 """
-                    UPDATE employees SET name=?, address=?, education=?, experience=?, contact_number=?, emergency_contact=?, department=?, salary=?, pan_path=?, aadhaar_path=?, other_docs_path=? WHERE id=?
+                    UPDATE employees SET name=?, address=?, education=?, experience=?, contact_number=?, emergency_contact=?, department=?, salary=?, pan_path=?, aadhaar_path=?, other_docs_path=?, date_of_joining=?, date_of_birth=? WHERE id=?
                     """,
                 (
                     name,
@@ -6325,10 +6545,13 @@ def edit_employee(emp_id):
                     pan_path,
                     aadhaar_path,
                     other_path,
+                    date_of_joining,
+                    date_of_birth,
                     emp_id,
                 ),
             )
             conn.commit()
+            sync_all_employee_roles(conn)
         if r["user_id"]:
             create_notification(
                 r["user_id"],
@@ -6374,6 +6597,16 @@ def edit_employee(emp_id):
                             <div class="col-md-6">
                                 <label class="form-label fw-bold">Experience</label>
                                 <input class="form-control" name="experience" value="{{ r.experience or '' }}">
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Date of Joining</label>
+                                <input class="form-control" type="date" name="date_of_joining" value="{{ r.date_of_joining or '' }}">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Date of Birth</label>
+                                <input class="form-control" type="date" name="date_of_birth" value="{{ r.date_of_birth or '' }}">
                             </div>
                         </div>
                         <div class="row g-3 mb-3">
