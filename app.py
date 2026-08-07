@@ -1856,14 +1856,17 @@ def login():
         <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Login</title>
+            <title>Login - Bizznex</title>
             <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
         </head>
         <body class="bg-light">
             <div class="container py-5">
                 <div class="card shadow-sm mx-auto" style="max-width: 420px;">
                     <div class="card-body">
-                        <h2 class="h4 mb-3">Login</h2>
+                        <div class="text-center mb-4">
+                            <img src="{{ url_for('static', filename='images/bizznex-logo.png') }}" alt="Bizznex Logo" style="height: 48px; width: auto;" class="mb-2">
+                            <h2 class="h4 mb-0 fw-bold">Bizznex Login</h2>
+                        </div>
                         {% with messages = get_flashed_messages(with_categories=true) %}
                             {% if messages %}
                                 {% for category, message in messages %}
@@ -1980,7 +1983,7 @@ If you did not request a password reset, please ignore this email.
         <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Forgot Password - HRMS</title>
+            <title>Forgot Password - Bizznex</title>
             <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
         </head>
         <body class="bg-light">
@@ -2124,7 +2127,7 @@ def reset_password(token):
         <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Reset Password - HRMS</title>
+            <title>Reset Password - Bizznex</title>
             <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
         </head>
         <body class="bg-light">

@@ -3,7 +3,7 @@
 body { margin: 0; background: var(--canvas); color: var(--ink); font-family: Inter, system-ui, sans-serif; }
 .app-shell { height: 100vh; height: 100dvh; overflow: hidden; display: flex; }
 .app-sidebar { background: #151b2e; color: #c6cede; display: flex; flex-direction: column; height: 100vh; height: 100dvh; left: 0; padding: 20px 14px 16px; position: fixed; top: 0; bottom: 0; transition: transform .22s ease; width: var(--sidebar-width); z-index: 1040; }
-.brand { align-items: center; color: #fff; display: flex; font-size: 20px; font-weight: 700; gap: 11px; margin: 0 10px 20px; text-decoration: none; flex-shrink: 0; }.brand-mark { align-items: center; background: var(--brand); border-radius: 10px; display: inline-flex; height: 34px; justify-content: center; width: 34px; }
+.brand { align-items: center; color: #fff; display: flex; font-size: 20px; font-weight: 700; gap: 11px; margin: 0 10px 20px; text-decoration: none; flex-shrink: 0; }.brand-mark { align-items: center; background: var(--brand); border-radius: 10px; display: inline-flex; height: 34px; justify-content: center; width: 34px; }.brand-logo { height: 36px; width: auto; max-width: 140px; object-fit: contain; display: inline-block; flex-shrink: 0; }
 .sidebar-nav { display: flex; flex-direction: column; gap: 4px; flex: 1; overflow-y: auto; min-height: 0; padding-right: 4px; scrollbar-width: thin; scrollbar-color: #2e3a5a transparent; }
 .sidebar-nav::-webkit-scrollbar { width: 5px; }
 .sidebar-nav::-webkit-scrollbar-track { background: transparent; }
