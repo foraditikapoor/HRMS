@@ -366,6 +366,10 @@ try:
 except Exception:  # noqa: BLE001  # Fallback when tzdata database is absent
     IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 
+# Central Attendance Policy Configuration (IST)
+LATE_PUNCH_IN_TIME = datetime.time(10, 15)       # Punch-in strictly after 10:15 AM IST is LATE
+HALF_DAY_PUNCH_OUT_TIME = datetime.time(15, 0)   # Punch-out strictly before 3:00 PM IST is HALF DAY
+
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key")
 app.config["DATABASE_PATH"] = os.path.join(app.instance_path, "users.db")
@@ -4532,14 +4536,31 @@ def logout():
 
 
 def is_late_punch(punch_in_str):
-    """Check if punch in time is after 09:30 AM IST standard start time."""
+    """Check if punch in time is strictly after LATE_PUNCH_IN_TIME (10:15 AM IST)."""
     if not punch_in_str:
         return False
     try:
         dt = datetime.datetime.fromisoformat(punch_in_str.strip())
         if dt.tzinfo is not None:
             dt = dt.astimezone(IST)
-        return (dt.hour > 9) or (dt.hour == 9 and dt.minute > 30)
+        else:
+            dt = dt.replace(tzinfo=IST)
+        return (dt.hour, dt.minute) > (LATE_PUNCH_IN_TIME.hour, LATE_PUNCH_IN_TIME.minute)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def is_half_day_punch(punch_out_str):
+    """Check if punch out time is strictly before HALF_DAY_PUNCH_OUT_TIME (3:00 PM IST). Returns False if no punch-out."""
+    if not punch_out_str:
+        return False
+    try:
+        dt = datetime.datetime.fromisoformat(punch_out_str.strip())
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(IST)
+        else:
+            dt = dt.replace(tzinfo=IST)
+        return (dt.hour, dt.minute) < (HALF_DAY_PUNCH_OUT_TIME.hour, HALF_DAY_PUNCH_OUT_TIME.minute)
     except Exception:  # noqa: BLE001
         return False
 
@@ -4590,6 +4611,7 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
     leave_count = 0
     holiday_count = 0
     late_count = 0
+    half_day_count = 0
     total_hours_sum = 0.0
 
     for day in range(1, num_days + 1):
@@ -4607,6 +4629,7 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
         status_label = "Upcoming"
         badge_class = "bg-light text-muted border"
         is_late = False
+        is_half_day = False
 
         if att_entry and att_entry["punch_in_time"]:
             status = "Present"
@@ -4617,6 +4640,9 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
             if is_late_punch(att_entry["punch_in_time"]):
                 is_late = True
                 late_count += 1
+            if is_half_day_punch(att_entry["punch_out_time"]):
+                is_half_day = True
+                half_day_count += 1
             if att_entry["total_hours"]:
                 try:
                     total_hours_sum += float(att_entry["total_hours"])
@@ -4690,6 +4716,7 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
                 "status_label": status_label,
                 "badge_class": badge_class,
                 "is_late": is_late,
+                "is_half_day": is_half_day,
                 "punch_in": att_entry["punch_in_time"] if att_entry else None,
                 "punch_in_fmt": in_fmt,
                 "punch_out": att_entry["punch_out_time"] if att_entry else None,
@@ -4740,6 +4767,7 @@ def get_monthly_attendance_calendar_data(year, month, target_user_id):
             "leave_count": leave_count,
             "holiday_count": holiday_count,
             "late_count": late_count,
+            "half_day_count": half_day_count,
             "total_hours": round(total_hours_sum, 2),
             "attendance_rate": attendance_rate,
         },
@@ -4764,6 +4792,8 @@ def get_admin_monthly_matrix_data(year, month):
     tot_pres = 0
     tot_abs = 0
     tot_leaves = 0
+    tot_lates = 0
+    tot_half_days = 0
 
     for u in user_rows:
         cal = get_monthly_attendance_calendar_data(year, month, u["user_id"])
@@ -4780,6 +4810,8 @@ def get_admin_monthly_matrix_data(year, month):
         tot_pres += cal["stats"]["present_count"]
         tot_abs += cal["stats"]["absent_count"]
         tot_leaves += cal["stats"]["leave_count"]
+        tot_lates += cal["stats"]["late_count"]
+        tot_half_days += cal["stats"]["half_day_count"]
 
     tot_workdays = tot_pres + tot_abs
     avg_rate = (
@@ -4807,6 +4839,8 @@ def get_admin_monthly_matrix_data(year, month):
             "total_present": tot_pres,
             "total_absent": tot_abs,
             "total_leaves": tot_leaves,
+            "total_lates": tot_lates,
+            "total_half_days": tot_half_days,
             "avg_attendance_rate": avg_rate,
         },
     }
@@ -4893,6 +4927,14 @@ def employee_attendance_calendar():
                 </div>
             </div>
             <div class="col-6 col-md-4 col-lg flex-fill">
+                <div class="card shadow-sm border-0 border-start border-4 border-info h-100">
+                    <div class="card-body p-3 text-center">
+                        <div class="text-muted small fw-bold mb-1"><i class="bi bi-hourglass-split me-1 text-info"></i>HALF DAYS</div>
+                        <div class="display-6 fw-bold text-info">{{ cal_data.stats.half_day_count }}</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-4 col-lg flex-fill">
                 <div class="card shadow-sm border-0 border-start border-4 border-primary h-100">
                     <div class="card-body p-3 text-center">
                         <div class="text-muted small fw-bold mb-1"><i class="bi bi-graph-up me-1 text-primary"></i>ATTENDANCE %</div>
@@ -4943,6 +4985,7 @@ def employee_attendance_calendar():
                              data-punchout="{{ d.punch_out_fmt }}"
                              data-hours="{{ d.total_hours_fmt }}"
                              data-late="{{ '1' if d.is_late else '0' }}"
+                             data-halfday="{{ '1' if d.is_half_day else '0' }}"
                              data-notes="{{ d.notes }}">
                             <div class="day-header d-flex justify-content-between align-items-center mb-2">
                                 <span class="day-number {% if d.is_today %}badge bg-primary rounded-pill px-2 py-1{% else %}fw-bold{% endif %}">{{ d.day }}</span>
@@ -4954,8 +4997,11 @@ def employee_attendance_calendar():
                                     {% if d.is_late %}
                                         <span class="badge bg-warning text-dark border style-badge mt-1"><i class="bi bi-alarm me-1"></i>Late</span>
                                     {% endif %}
+                                    {% if d.is_half_day %}
+                                        <span class="badge bg-info text-dark border style-badge mt-1"><i class="bi bi-hourglass-split me-1"></i>Half Day</span>
+                                    {% endif %}
                                     {% if d.total_hours %}
-                                        <div class="badge bg-light text-dark border mt-1"><i class="bi bi-hourglass-split me-1"></i>{{ d.total_hours }} hrs</div>
+                                        <div class="badge bg-light text-dark border mt-1"><i class="bi bi-hourglass me-1"></i>{{ d.total_hours }} hrs</div>
                                     {% endif %}
                                 {% elif d.status == 'Leave' or d.status == 'Pending Leave' %}
                                     <div class="text-warning fw-semibold"><i class="bi bi-calendar-range me-1"></i>{{ d.leave_type or 'Leave' }}</div>
@@ -4995,7 +5041,10 @@ def employee_attendance_calendar():
                         </div>
 
                         <div id="modalLateAlert" class="alert alert-warning py-2 mb-3 d-none">
-                            <i class="bi bi-exclamation-triangle-fill me-2"></i><strong>Late Arrival:</strong> Punched in after 09:30 AM.
+                            <i class="bi bi-exclamation-triangle-fill me-2"></i><strong>Late Arrival:</strong> Punched in after 10:15 AM IST.
+                        </div>
+                        <div id="modalHalfDayAlert" class="alert alert-info py-2 mb-3 d-none">
+                            <i class="bi bi-clock-history me-2"></i><strong>Half Day:</strong> Punched out before 3:00 PM IST.
                         </div>
 
                         <div class="row g-3 text-center mb-3">
@@ -5042,6 +5091,7 @@ def employee_attendance_calendar():
             var punchOut = el.getAttribute('data-punchout');
             var hours = el.getAttribute('data-hours');
             var isLate = el.getAttribute('data-late') === '1';
+            var isHalfDay = el.getAttribute('data-halfday') === '1';
             var notes = el.getAttribute('data-notes');
 
             document.getElementById('modalDateTitle').innerText = date;
@@ -5060,6 +5110,15 @@ def employee_attendance_calendar():
                 lateAlert.classList.remove('d-none');
             } else {
                 lateAlert.classList.add('d-none');
+            }
+
+            var halfDayAlert = document.getElementById('modalHalfDayAlert');
+            if (halfDayAlert) {
+                if (isHalfDay) {
+                    halfDayAlert.classList.remove('d-none');
+                } else {
+                    halfDayAlert.classList.add('d-none');
+                }
             }
 
             var notesContainer = document.getElementById('modalNotesContainer');
@@ -5230,6 +5289,14 @@ def admin_attendance():
                     </div>
                 </div>
                 <div class="col-6 col-md-4 col-lg flex-fill">
+                    <div class="card shadow-sm border-0 border-start border-4 border-info h-100">
+                        <div class="card-body p-3 text-center">
+                            <div class="text-muted small fw-bold mb-1"><i class="bi bi-hourglass-split me-1 text-info"></i>HALF DAYS</div>
+                            <div class="display-6 fw-bold text-info">{{ single_cal_data.stats.half_day_count }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-4 col-lg flex-fill">
                     <div class="card shadow-sm border-0 border-start border-4 border-primary h-100">
                         <div class="card-body p-3 text-center">
                             <div class="text-muted small fw-bold mb-1"><i class="bi bi-graph-up me-1 text-primary"></i>ATTENDANCE %</div>
@@ -5277,6 +5344,7 @@ def admin_attendance():
                                  data-punchout="{{ d.punch_out_fmt }}"
                                  data-hours="{{ d.total_hours_fmt }}"
                                  data-late="{{ '1' if d.is_late else '0' }}"
+                                 data-halfday="{{ '1' if d.is_half_day else '0' }}"
                                  data-notes="{{ d.notes }}">
                                 <div class="day-header d-flex justify-content-between align-items-center mb-2">
                                     <span class="day-number {% if d.is_today %}badge bg-primary rounded-pill px-2 py-1{% else %}fw-bold{% endif %}">{{ d.day }}</span>
@@ -5288,8 +5356,11 @@ def admin_attendance():
                                         {% if d.is_late %}
                                             <span class="badge bg-warning text-dark border style-badge mt-1"><i class="bi bi-alarm me-1"></i>Late</span>
                                         {% endif %}
+                                        {% if d.is_half_day %}
+                                            <span class="badge bg-info text-dark border style-badge mt-1"><i class="bi bi-hourglass-split me-1"></i>Half Day</span>
+                                        {% endif %}
                                         {% if d.total_hours %}
-                                            <div class="badge bg-light text-dark border mt-1"><i class="bi bi-hourglass-split me-1"></i>{{ d.total_hours }} hrs</div>
+                                            <div class="badge bg-light text-dark border mt-1"><i class="bi bi-hourglass me-1"></i>{{ d.total_hours }} hrs</div>
                                         {% endif %}
                                     {% elif d.status == 'Leave' or d.status == 'Pending Leave' %}
                                         <div class="text-warning fw-semibold"><i class="bi bi-calendar-range me-1"></i>{{ d.leave_type or 'Leave' }}</div>
@@ -5329,7 +5400,10 @@ def admin_attendance():
                             </div>
 
                             <div id="modalLateAlert" class="alert alert-warning py-2 mb-3 d-none">
-                                <i class="bi bi-exclamation-triangle-fill me-2"></i><strong>Late Arrival:</strong> Punched in after 09:30 AM.
+                                <i class="bi bi-exclamation-triangle-fill me-2"></i><strong>Late Arrival:</strong> Punched in after 10:15 AM IST.
+                            </div>
+                            <div id="modalHalfDayAlert" class="alert alert-info py-2 mb-3 d-none">
+                                <i class="bi bi-clock-history me-2"></i><strong>Half Day:</strong> Punched out before 3:00 PM IST.
                             </div>
 
                             <div class="row g-3 text-center mb-3">
@@ -5376,6 +5450,7 @@ def admin_attendance():
                 var punchOut = el.getAttribute('data-punchout');
                 var hours = el.getAttribute('data-hours');
                 var isLate = el.getAttribute('data-late') === '1';
+                var isHalfDay = el.getAttribute('data-halfday') === '1';
                 var notes = el.getAttribute('data-notes');
 
                 document.getElementById('modalDateTitle').innerText = date;
@@ -5394,6 +5469,15 @@ def admin_attendance():
                     lateAlert.classList.remove('d-none');
                 } else {
                     lateAlert.classList.add('d-none');
+                }
+
+                var halfDayAlert = document.getElementById('modalHalfDayAlert');
+                if (halfDayAlert) {
+                    if (isHalfDay) {
+                        halfDayAlert.classList.remove('d-none');
+                    } else {
+                        halfDayAlert.classList.add('d-none');
+                    }
                 }
 
                 var notesContainer = document.getElementById('modalNotesContainer');
