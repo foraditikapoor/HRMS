@@ -1786,6 +1786,26 @@ def api_update_theme_preference():
     return jsonify({"status": "success", "theme": theme})
 
 
+@app.route("/api/user-preferences/sidebar", methods=["POST"])
+@login_required
+def api_update_sidebar_preference():
+    data = request.get_json(silent=True) or {}
+    sidebar_style = (data.get("sidebar_style") or request.form.get("sidebar_style") or "default").strip()
+    if sidebar_style not in ["default", "compact"]:
+        sidebar_style = "default"
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_preferences (user_id, sidebar_style)
+            VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET sidebar_style = excluded.sidebar_style
+            """,
+            (current_user.id, sidebar_style),
+        )
+        conn.commit()
+    return jsonify({"status": "success", "sidebar_style": sidebar_style})
+
+
 @app.route("/")
 def index():
     return render_template_string(
@@ -1858,6 +1878,8 @@ def login():
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>Login - Bizznex</title>
             <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+            <link href="{{ url_for('static', filename='css/hrms-ui.css') }}" rel="stylesheet">
         </head>
         <body class="bg-light">
             <div class="container py-5">
@@ -1895,6 +1917,7 @@ def login():
                 </div>
             </div>
             <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+            <script src="{{ url_for('static', filename='js/hrms-ui.js') }}"></script>
         </body>
         </html>
         """
@@ -2129,6 +2152,8 @@ def reset_password(token):
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>Reset Password - Bizznex</title>
             <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+            <link href="{{ url_for('static', filename='css/hrms-ui.css') }}" rel="stylesheet">
         </head>
         <body class="bg-light">
             <div class="container py-5">
@@ -2164,6 +2189,7 @@ def reset_password(token):
                 </div>
             </div>
             <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+            <script src="{{ url_for('static', filename='js/hrms-ui.js') }}"></script>
         </body>
         </html>
         """
@@ -2263,6 +2289,8 @@ def change_password():
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>Change Password</title>
             <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+            <link href="{{ url_for('static', filename='css/hrms-ui.css') }}" rel="stylesheet">
         </head>
         <body class="bg-light">
             <div class="container py-5">
@@ -2287,6 +2315,8 @@ def change_password():
                     </div>
                 </div>
             </div>
+            <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+            <script src="{{ url_for('static', filename='js/hrms-ui.js') }}"></script>
         </body>
         </html>
         """

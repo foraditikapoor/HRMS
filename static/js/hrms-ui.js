@@ -1,17 +1,104 @@
-// timezone cache refresh
 (() => {
+  const appShell = document.querySelector('.app-shell');
   const sidebar = document.getElementById('appSidebar');
   const toggle = document.querySelector('.sidebar-toggle');
+
+  function setSidebarCollapsed(collapsed, syncServer = true) {
+    const targetShell = document.querySelector('.app-shell');
+    if (!targetShell) return;
+    if (collapsed) {
+      targetShell.classList.add('is-collapsed');
+      document.documentElement.classList.add('sidebar-collapsed-init');
+      localStorage.setItem('hrms-sidebar-state', 'collapsed');
+    } else {
+      targetShell.classList.remove('is-collapsed');
+      document.documentElement.classList.remove('sidebar-collapsed-init');
+      localStorage.setItem('hrms-sidebar-state', 'expanded');
+    }
+    const currentToggle = document.querySelector('.sidebar-toggle');
+    if (currentToggle) {
+      currentToggle.setAttribute('aria-expanded', String(!collapsed));
+    }
+    if (syncServer) {
+      fetch('/api/user-preferences/sidebar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sidebar_style: collapsed ? 'compact' : 'default' })
+      }).catch(err => console.error('Failed to sync sidebar preference:', err));
+    }
+  }
+
+  // Restore initial sidebar state on desktop
+  const storedSidebarState = localStorage.getItem('hrms-sidebar-state');
+  const docSidebarPref = document.documentElement.getAttribute('data-sidebar-preference');
+  let initialCollapsed = false;
+  if (storedSidebarState) {
+    initialCollapsed = (storedSidebarState === 'collapsed');
+  } else if (docSidebarPref) {
+    initialCollapsed = (docSidebarPref === 'compact');
+  }
+  if (window.innerWidth > 900 && initialCollapsed && appShell) {
+    setSidebarCollapsed(true, false);
+  }
+
   if (sidebar && toggle) {
-    toggle.addEventListener('click', () => {
-      const open = sidebar.classList.toggle('is-open');
-      toggle.setAttribute('aria-expanded', String(open));
+    toggle.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (window.innerWidth <= 900) {
+        // Mobile drawer toggle
+        const open = sidebar.classList.toggle('is-open');
+        toggle.setAttribute('aria-expanded', String(open));
+      } else {
+        // Desktop collapse toggle
+        const currentShell = document.querySelector('.app-shell');
+        const isCollapsedNow = currentShell ? currentShell.classList.contains('is-collapsed') : false;
+        setSidebarCollapsed(!isCollapsedNow, true);
+      }
     });
+
     document.addEventListener('click', (event) => {
       if (window.innerWidth <= 900 && sidebar.classList.contains('is-open') && !sidebar.contains(event.target) && !toggle.contains(event.target)) {
         sidebar.classList.remove('is-open');
         toggle.setAttribute('aria-expanded', 'false');
       }
+    });
+  }
+
+  // Universal Password Visibility Toggle Handler
+  function initPasswordToggle() {
+    document.querySelectorAll('input[type="password"]').forEach((input) => {
+      if (input.dataset.pwToggleInit === 'true') return;
+
+      let wrapper = input.parentElement;
+      if (!wrapper || !wrapper.classList.contains('password-input-wrapper')) {
+        wrapper = document.createElement('div');
+        wrapper.className = 'password-input-wrapper';
+        input.parentNode.insertBefore(wrapper, input);
+        wrapper.appendChild(input);
+      }
+
+      input.dataset.pwToggleInit = 'true';
+
+      const toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button';
+      toggleBtn.className = 'password-toggle-btn';
+      toggleBtn.setAttribute('aria-label', 'Show password');
+      toggleBtn.setAttribute('tabindex', '0');
+      toggleBtn.innerHTML = '<i class="bi bi-eye"></i>';
+
+      toggleBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const isPw = input.type === 'password';
+        input.type = isPw ? 'text' : 'password';
+        const icon = toggleBtn.querySelector('i');
+        if (icon) {
+          icon.className = isPw ? 'bi bi-eye-slash' : 'bi bi-eye';
+        }
+        toggleBtn.setAttribute('aria-label', isPw ? 'Hide password' : 'Show password');
+      });
+
+      wrapper.appendChild(toggleBtn);
     });
   }
 
@@ -55,6 +142,21 @@
 
   // Fallback and instant toggle handling for collapse dropdowns
   document.addEventListener('DOMContentLoaded', () => {
+    initPasswordToggle();
+
+    // Attach listener for Sidebar Display Preference on Appearance Settings page
+    const sidebarSelect = document.querySelector('select[name="sidebar_style"]');
+    if (sidebarSelect) {
+      sidebarSelect.addEventListener('change', (e) => {
+        const isCompact = (e.target.value === 'compact');
+        if (window.innerWidth > 900) {
+          setSidebarCollapsed(isCompact, true);
+        } else {
+          localStorage.setItem('hrms-sidebar-state', isCompact ? 'collapsed' : 'expanded');
+        }
+      });
+    }
+
     // Attach live change listeners for theme radio buttons on Appearance Settings page
     ['themeLight', 'themeDark', 'themeSystem'].forEach(id => {
       const radio = document.getElementById(id);

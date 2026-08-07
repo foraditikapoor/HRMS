@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-bs-theme="{{ current_user_theme if current_user_theme in ['light', 'dark'] else '' }}" data-theme-preference="{{ current_user_theme or 'light' }}">
+<html lang="en" data-bs-theme="{{ current_user_theme if current_user_theme in ['light', 'dark'] else '' }}" data-theme-preference="{{ current_user_theme or 'light' }}" data-sidebar-preference="{{ current_user_sidebar_style or 'default' }}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -14,6 +14,13 @@
             document.documentElement.setAttribute('data-theme', effectiveTheme);
             localStorage.setItem('hrms-theme-preference', themePref);
             localStorage.setItem('hrms-effective-theme', effectiveTheme);
+
+            var sidebarPref = "{{ current_user_sidebar_style or 'default' }}";
+            var storedSidebarPref = localStorage.getItem('hrms-sidebar-state');
+            var isCollapsed = storedSidebarPref ? (storedSidebarPref === 'collapsed') : (sidebarPref === 'compact');
+            if (isCollapsed && window.innerWidth > 900) {
+                document.documentElement.classList.add('sidebar-collapsed-init');
+            }
         })();
     </script>
     <title>{% block title %}Bizznex{% endblock %} | Bizznex</title>
@@ -26,7 +33,7 @@
     {% block head %}{% endblock %}
 </head>
 <body>
-    <div class="app-shell">
+    <div class="app-shell {% if current_user_sidebar_style == 'compact' %}is-collapsed{% endif %}">
         <aside class="app-sidebar" id="appSidebar" aria-label="Primary navigation">
             <a class="brand" href="{{ url_for('dashboard') }}">
                 <div class="brand-logo-container">
