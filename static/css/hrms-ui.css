@@ -714,6 +714,133 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: Int
     background-color: rgba(129, 140, 248, 0.12);
 }
 
+/* Global Component Standardization & Dark Mode Enhancements */
+.form-label {
+    font-weight: 600;
+    font-size: 13px;
+    margin-bottom: 6px;
+}
+
+.table > :not(caption) > * > * {
+    padding: 0.75rem 1rem;
+    vertical-align: middle;
+}
+
+.table th {
+    font-weight: 700;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+[data-bs-theme="dark"] .list-group-item {
+    background-color: var(--surface);
+    color: var(--ink);
+    border-color: var(--line);
+}
+
+[data-bs-theme="dark"] .accordion-item {
+    background-color: var(--surface);
+    color: var(--ink);
+    border-color: var(--line);
+}
+
+[data-bs-theme="dark"] .accordion-button {
+    background-color: #162032;
+    color: var(--ink);
+}
+
+[data-bs-theme="dark"] .accordion-button:not(.collapsed) {
+    background-color: #202a44;
+    color: var(--brand);
+}
+
+[data-bs-theme="dark"] .nav-tabs {
+    border-bottom-color: var(--line);
+}
+
+[data-bs-theme="dark"] .nav-tabs .nav-link {
+    color: var(--muted);
+}
+
+[data-bs-theme="dark"] .nav-tabs .nav-link.active {
+    background-color: var(--surface);
+    color: var(--ink);
+    border-color: var(--line) var(--line) var(--surface);
+}
+
+[data-bs-theme="dark"] .nav-pills .nav-link:not(.active) {
+    color: var(--muted);
+}
+
+[data-bs-theme="dark"] .badge.bg-light {
+    background-color: #334155 !important;
+    color: #f8fafc !important;
+}
+
+[data-bs-theme="dark"] .badge.bg-secondary {
+    background-color: #475569 !important;
+    color: #f8fafc !important;
+}
+
+[data-bs-theme="dark"] .page-link {
+    background-color: var(--surface);
+    border-color: var(--line);
+    color: var(--ink);
+}
+
+[data-bs-theme="dark"] .page-item.disabled .page-link {
+    background-color: #0f172a;
+    border-color: var(--line);
+    color: var(--muted);
+}
+
+[data-bs-theme="dark"] .page-item.active .page-link {
+    background-color: var(--brand);
+    border-color: var(--brand);
+    color: #fff;
+}
+
+[data-bs-theme="dark"] .input-group-text {
+    background-color: #162032;
+    border-color: var(--line);
+    color: var(--ink);
+}
+
+[data-bs-theme="dark"] .alert-light {
+    background-color: #162032 !important;
+    border-color: var(--line) !important;
+    color: var(--ink) !important;
+}
+
+[data-bs-theme="dark"] .form-check-input {
+    background-color: #0f172a;
+    border-color: var(--line);
+}
+
+[data-bs-theme="dark"] .form-check-input:checked {
+    background-color: var(--brand);
+    border-color: var(--brand);
+}
+
+[data-bs-theme="dark"] .btn-outline-secondary {
+    color: var(--muted);
+    border-color: var(--line);
+}
+
+[data-bs-theme="dark"] .btn-outline-secondary:hover {
+    background-color: #334155;
+    color: #f8fafc;
+    border-color: #334155;
+}
+
+[data-bs-theme="dark"] .btn-light {
+    background-color: #162032 !important;
+    border-color: var(--line) !important;
+    color: var(--ink) !important;
+}
+
+
 
 
 

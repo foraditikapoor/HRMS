@@ -2040,10 +2040,21 @@ def login():
         <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
+            <script>
+                (function() {
+                    var themePref = localStorage.getItem('hrms-theme-preference') || 'light';
+                    var effectiveTheme = themePref;
+                    if (!effectiveTheme || effectiveTheme === 'system') {
+                        effectiveTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+                    }
+                    document.documentElement.setAttribute('data-bs-theme', effectiveTheme);
+                    document.documentElement.setAttribute('data-theme', effectiveTheme);
+                })();
+            </script>
             <title>Login - Bizznex</title>
             <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
             <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
-            <link href="{{ url_for('static', filename='css/hrms-ui.css') }}" rel="stylesheet">
+            <link href="{{ url_for('static', filename='css/hrms-ui.css', v='1.0.5') }}" rel="stylesheet">
         </head>
         <body class="bg-light">
             <div class="container py-5">
@@ -2314,10 +2325,21 @@ def reset_password(token):
         <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
+            <script>
+                (function() {
+                    var themePref = localStorage.getItem('hrms-theme-preference') || 'light';
+                    var effectiveTheme = themePref;
+                    if (!effectiveTheme || effectiveTheme === 'system') {
+                        effectiveTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+                    }
+                    document.documentElement.setAttribute('data-bs-theme', effectiveTheme);
+                    document.documentElement.setAttribute('data-theme', effectiveTheme);
+                })();
+            </script>
             <title>Reset Password - Bizznex</title>
             <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
             <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
-            <link href="{{ url_for('static', filename='css/hrms-ui.css') }}" rel="stylesheet">
+            <link href="{{ url_for('static', filename='css/hrms-ui.css', v='1.0.5') }}" rel="stylesheet">
         </head>
         <body class="bg-light">
             <div class="container py-5">
