@@ -29,6 +29,7 @@ except Exception:  # noqa: BLE001  # Fallback manual env loader on import error
     else:
         print(f"DEBUG: no .env found at {dotenv_path}")
 import calendar  # noqa: I001
+import hashlib
 import json
 import secrets
 import smtplib
@@ -568,6 +569,30 @@ def ensure_user_columns():
             conn.execute("ALTER TABLE users ADD COLUMN profile_pic TEXT")
         if "last_active_at" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN last_active_at TEXT")
+        conn.commit()
+
+
+def ensure_password_reset_tokens_table():
+    with get_db() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                token_hash TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                used_at INTEGER,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reset_token_hash ON password_reset_tokens(token_hash)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reset_token_user ON password_reset_tokens(user_id)"
+        )
         conn.commit()
 
 
@@ -1568,6 +1593,7 @@ def init_db():
         conn.commit()
 
         ensure_user_columns()
+        ensure_password_reset_tokens_table()
         ensure_attendance_table()
         ensure_holidays_table()
         ensure_employee_table()
@@ -1750,13 +1776,26 @@ def login():
                 <div class="card shadow-sm mx-auto" style="max-width: 420px;">
                     <div class="card-body">
                         <h2 class="h4 mb-3">Login</h2>
+                        {% with messages = get_flashed_messages(with_categories=true) %}
+                            {% if messages %}
+                                {% for category, message in messages %}
+                                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                                        {{ message }}
+                                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                                    </div>
+                                {% endfor %}
+                            {% endif %}
+                        {% endwith %}
                         <form method="post">
                             <div class="mb-3">
                                 <label class="form-label">Username</label>
                                 <input class="form-control" name="username" required>
                             </div>
                             <div class="mb-3">
-                                <label class="form-label">Password</label>
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <label class="form-label mb-0">Password</label>
+                                    <a href="{{ url_for('forgot_password') }}" class="small text-primary text-decoration-none">Forgot Password?</a>
+                                </div>
                                 <input class="form-control" type="password" name="password" required>
                             </div>
                             <button class="btn btn-primary w-100" type="submit">Login</button>
@@ -1764,6 +1803,276 @@ def login():
                     </div>
                 </div>
             </div>
+            <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+        </body>
+        </html>
+        """
+    )
+
+
+@app.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    if current_user.is_authenticated:
+        return redirect(url_for("dashboard"))
+
+    if request.method == "POST":
+        identifier = request.form.get("identifier", "").strip()
+        if identifier:
+            user_row = None
+            with get_db() as conn:
+                user_row = conn.execute(
+                    "SELECT id, username, email, full_name FROM users WHERE (LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?)) AND role != 'disabled'",
+                    (identifier, identifier),
+                ).fetchone()
+
+            if user_row and user_row["email"]:
+                now_ts = int(time.time())
+                expires_at = now_ts + 1800  # 30 minutes validity
+                raw_token = secrets.token_urlsafe(32)
+                token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+                try:
+                    with get_db() as conn:
+                        # Invalidate previous unused reset tokens for this user
+                        conn.execute(
+                            "UPDATE password_reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL",
+                            (now_ts, user_row["id"]),
+                        )
+                        conn.execute(
+                            """
+                            INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, created_at)
+                            VALUES (?, ?, ?, ?)
+                            """,
+                            (user_row["id"], token_hash, expires_at, now_ts),
+                        )
+                        conn.commit()
+
+                    reset_url = url_for("reset_password", token=raw_token, _external=True)
+                    recipient_name = user_row["full_name"] or user_row["username"]
+                    subject = "HRMS - Password Reset Request"
+                    html_body = f"""
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e7ebf3; border-radius: 8px;">
+                        <h2 style="color: #4f46e5; margin-top: 0;">HRMS Password Reset</h2>
+                        <p>Hello <strong>{recipient_name}</strong>,</p>
+                        <p>We received a request to reset your HRMS account password.</p>
+                        <p style="margin: 24px 0;">
+                            <a href="{reset_url}" style="background-color: #4f46e5; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold;">Reset Password</a>
+                        </p>
+                        <p style="color: #64748b; font-size: 14px;">Or copy and paste this URL into your browser:</p>
+                        <p style="word-break: break-all; font-size: 13px; color: #4f46e5;"><a href="{reset_url}">{reset_url}</a></p>
+                        <p style="color: #64748b; font-size: 13px;">This reset link will expire in <strong>30 minutes</strong>.</p>
+                        <hr style="border: 0; border-top: 1px solid #e7ebf3; margin: 20px 0;">
+                        <p style="color: #94a3b8; font-size: 12px;">If you did not request a password reset, please ignore this email. Your password will remain unchanged.</p>
+                    </div>
+                    """
+                    text_body = f"""Hello {recipient_name},
+
+We received a request to reset your HRMS account password.
+
+To reset your password, visit the following link:
+{reset_url}
+
+This link is valid for 30 minutes.
+
+If you did not request a password reset, please ignore this email.
+"""
+                    send_email(user_row["email"], subject, html_body, text_content=text_body)
+                except Exception as e:  # noqa: BLE001
+                    print(f"ERROR: Failed to process password reset request for {identifier}: {e}")
+                    traceback.print_exc()
+
+        # Always return generic security response
+        flash("If an account exists with those details, a password reset link has been sent.", "info")
+        return redirect(url_for("forgot_password"))
+
+    return render_template_string(
+        """
+        <!doctype html>
+        <html lang="en">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Forgot Password - HRMS</title>
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        </head>
+        <body class="bg-light">
+            <div class="container py-5">
+                <div class="card shadow-sm mx-auto" style="max-width: 420px;">
+                    <div class="card-body">
+                        <h2 class="h4 mb-2">Forgot Password</h2>
+                        <p class="text-muted small mb-3">Enter your username or email address and we'll send you a password reset link.</p>
+                        {% with messages = get_flashed_messages(with_categories=true) %}
+                            {% if messages %}
+                                {% for category, message in messages %}
+                                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                                        {{ message }}
+                                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                                    </div>
+                                {% endfor %}
+                            {% endif %}
+                        {% endwith %}
+                        <form method="post">
+                            <div class="mb-3">
+                                <label class="form-label">Username or Email Address</label>
+                                <input class="form-control" name="identifier" required placeholder="Enter username or email">
+                            </div>
+                            <button class="btn btn-primary w-100 mb-3" type="submit">Send Reset Link</button>
+                            <div class="text-center">
+                                <a href="{{ url_for('login') }}" class="small text-primary text-decoration-none">&larr; Back to Login</a>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+        </body>
+        </html>
+        """
+    )
+
+
+@app.route("/reset-password/<token>", methods=["GET", "POST"])
+def reset_password(token):
+    if current_user.is_authenticated:
+        return redirect(url_for("dashboard"))
+
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    now_ts = int(time.time())
+
+    tok_row = None
+    with get_db() as conn:
+        tok_row = conn.execute(
+            """
+            SELECT id, user_id, expires_at, used_at
+            FROM password_reset_tokens
+            WHERE token_hash = ?
+            """,
+            (token_hash,),
+        ).fetchone()
+
+    is_valid = bool(
+        tok_row
+        and tok_row["used_at"] is None
+        and tok_row["expires_at"] > now_ts
+    )
+
+    if not is_valid:
+        return render_template_string(
+            """
+            <!doctype html>
+            <html lang="en">
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <title>Reset Password - Invalid Link</title>
+                <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+            </head>
+            <body class="bg-light">
+                <div class="container py-5">
+                    <div class="card shadow-sm mx-auto" style="max-width: 460px;">
+                        <div class="card-body text-center p-4">
+                            <div class="text-danger mb-3" style="font-size: 2.5rem;">&#9888;</div>
+                            <h2 class="h4 mb-3">Link Invalid or Expired</h2>
+                            <p class="text-muted mb-4">This password reset link is invalid or has expired. Please request a new one.</p>
+                            <a href="{{ url_for('forgot_password') }}" class="btn btn-primary w-100 mb-2">Request New Reset Link</a>
+                            <a href="{{ url_for('login') }}" class="btn btn-outline-secondary w-100">Back to Login</a>
+                        </div>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """
+        ), 400
+
+    if request.method == "POST":
+        new_password = request.form.get("new_password", "")
+        confirm_password = request.form.get("confirm_password", "")
+
+        if not new_password or not confirm_password:
+            flash("All fields are required.", "danger")
+        elif new_password != confirm_password:
+            flash("Passwords do not match.", "danger")
+        elif len(new_password) < 8:
+            flash("New password must be at least 8 characters long.", "danger")
+        else:
+            with get_db() as conn:
+                # Re-verify token validity within transaction
+                tok = conn.execute(
+                    "SELECT id, user_id, expires_at, used_at FROM password_reset_tokens WHERE token_hash = ?",
+                    (token_hash,),
+                ).fetchone()
+
+                if not tok or tok["used_at"] is not None or tok["expires_at"] <= int(time.time()):
+                    flash("This password reset link is invalid or has expired. Please request a new one.", "danger")
+                    return redirect(url_for("forgot_password"))
+
+                user_id = tok["user_id"]
+                token_id = tok["id"]
+                now_time = int(time.time())
+                new_hash = generate_password_hash(new_password)
+
+                # Atomically update password and mark all reset tokens for user as used
+                conn.execute(
+                    "UPDATE users SET password_hash = ?, force_password_change = 0 WHERE id = ?",
+                    (new_hash, user_id),
+                )
+                conn.execute(
+                    "UPDATE password_reset_tokens SET used_at = ? WHERE id = ?",
+                    (now_time, token_id),
+                )
+                conn.execute(
+                    "UPDATE password_reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL",
+                    (now_time, user_id),
+                )
+                conn.commit()
+
+            flash("Your password has been reset successfully. Please log in with your new password.", "success")
+            return redirect(url_for("login"))
+
+    return render_template_string(
+        """
+        <!doctype html>
+        <html lang="en">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Reset Password - HRMS</title>
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        </head>
+        <body class="bg-light">
+            <div class="container py-5">
+                <div class="card shadow-sm mx-auto" style="max-width: 420px;">
+                    <div class="card-body">
+                        <h2 class="h4 mb-3">Reset Password</h2>
+                        {% with messages = get_flashed_messages(with_categories=true) %}
+                            {% if messages %}
+                                {% for category, message in messages %}
+                                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                                        {{ message }}
+                                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                                    </div>
+                                {% endfor %}
+                            {% endif %}
+                        {% endwith %}
+                        <form method="post">
+                            <div class="mb-3">
+                                <label class="form-label">New Password</label>
+                                <input class="form-control" type="password" name="new_password" required minlength="8">
+                                <div class="form-text text-muted">Must be at least 8 characters long.</div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Confirm New Password</label>
+                                <input class="form-control" type="password" name="confirm_password" required minlength="8">
+                            </div>
+                            <button class="btn btn-primary w-100 mb-3" type="submit">Reset Password</button>
+                            <div class="text-center">
+                                <a href="{{ url_for('login') }}" class="small text-primary text-decoration-none">&larr; Back to Login</a>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
         </body>
         </html>
         """
@@ -1782,6 +2091,8 @@ def require_password_change():
         "change_password",
         "logout",
         "login",
+        "forgot_password",
+        "reset_password",
         "static",
         "create_user",
         "send_welcome_email",
