@@ -5447,7 +5447,9 @@ def admin_attendance():
                     <div class="col-6 col-md-3 col-lg-2">
                         <label class="form-label small fw-bold text-muted mb-1"><i class="bi bi-calendar-event me-1"></i>Year</label>
                         <select name="year" class="form-select form-select-sm" onchange="this.form.submit()">
-                            {% for y in range(today_year - 2, today_year + 2) %}
+                            {% set start_yr = today_year - 5 %}
+                            {% set end_yr = (year + 5) if (year + 5) > (today_year + 10) else (today_year + 10) %}
+                            {% for y in range(start_yr, end_yr + 1) %}
                                 <option value="{{ y }}" {% if year == y %}selected{% endif %}>{{ y }}</option>
                             {% endfor %}
                         </select>
@@ -12145,6 +12147,15 @@ def settings_payroll():
 
     currency = cs["currency"] if cs else "INR (₹)"
 
+    year_set = set(range(now.year - 5, now.year + 6))
+    db_years = conn.execute("SELECT DISTINCT substr(month_year, 1, 4) AS y FROM payroll_records").fetchall()
+    for y_row in db_years:
+        if y_row["y"] and y_row["y"].isdigit():
+            year_set.add(int(y_row["y"]))
+    if selected_year_filter and selected_year_filter.isdigit():
+        year_set.add(int(selected_year_filter))
+    available_payroll_years = sorted(list(year_set), reverse=True)
+
     return render_template_string(
         """
         {% extends "base.html" %}
@@ -12346,9 +12357,9 @@ def settings_payroll():
                     {% if selected_emp_id %}<input type="hidden" name="employee_id" value="{{ selected_emp_id }}">{% endif %}
                     <select name="year" class="form-select form-select-sm" style="width: 110px;" onchange="this.form.submit()">
                         <option value="">All Years</option>
-                        <option value="2026" {% if selected_year_filter == '2026' %}selected{% endif %}>2026</option>
-                        <option value="2025" {% if selected_year_filter == '2025' %}selected{% endif %}>2025</option>
-                        <option value="2024" {% if selected_year_filter == '2024' %}selected{% endif %}>2024</option>
+                        {% for y in available_payroll_years %}
+                            <option value="{{ y }}" {% if selected_year_filter == y|string %}selected{% endif %}>{{ y }}</option>
+                        {% endfor %}
                     </select>
                 </form>
             </div>
@@ -12457,6 +12468,7 @@ def settings_payroll():
         selected_month_str=selected_month_str,
         selected_emp_id=selected_emp_id,
         selected_year_filter=selected_year_filter,
+        available_payroll_years=available_payroll_years,
     )
 
 
