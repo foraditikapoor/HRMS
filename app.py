@@ -4332,6 +4332,12 @@ def completed_tasks_archive():
         flash("Admin access required.", "danger")
         return redirect(url_for("dashboard"))
 
+    start_date = (request.args.get("start_date") or request.args.get("from_date") or "").strip()
+    end_date = (request.args.get("end_date") or request.args.get("to_date") or "").strip()
+
+    if start_date and end_date and start_date > end_date:
+        flash("From Date cannot be after To Date.", "warning")
+
     with get_db() as conn:
         employees = conn.execute("SELECT name FROM employees ORDER BY name").fetchall()
         task_projects = conn.execute("SELECT DISTINCT project FROM tasks WHERE project IS NOT NULL AND project != '' ORDER BY project").fetchall()
@@ -9763,6 +9769,37 @@ def employee_performance_profile(user_id):
         flash("Access denied.", "danger")
         return redirect(url_for("dashboard"))
 
+    from_date = (request.args.get("from_date") or request.args.get("start_date") or "").strip()
+    to_date = (request.args.get("to_date") or request.args.get("end_date") or "").strip()
+
+    valid_date_range = True
+    if from_date and to_date and from_date > to_date:
+        flash("From Date cannot be after To Date.", "warning")
+        valid_date_range = False
+
+    rev_sql = """
+        SELECT id, employee_user_id, employee_name, reviewer_username, review_period,
+               overall_rating, technical_skills_score, communication_score,
+               productivity_score, teamwork_score, strengths, areas_for_improvement,
+               comments, created_at
+        FROM performance_reviews
+        WHERE employee_user_id = ?
+    """
+    rev_params = [user_id]
+
+    if valid_date_range:
+        if from_date and to_date:
+            rev_sql += " AND created_at >= ? AND created_at <= ?"
+            rev_params.extend([from_date, to_date + " 23:59:59"])
+        elif from_date:
+            rev_sql += " AND created_at >= ?"
+            rev_params.append(from_date)
+        elif to_date:
+            rev_sql += " AND created_at <= ?"
+            rev_params.append(to_date + " 23:59:59")
+
+    rev_sql += " ORDER BY created_at DESC, id DESC"
+
     with get_db() as conn:
         emp_user = conn.execute(
             "SELECT id, username, role, full_name, email, profile_pic, last_active_at FROM users WHERE id = ?",
@@ -9773,18 +9810,7 @@ def employee_performance_profile(user_id):
             flash("Employee user not found.", "danger")
             return redirect(url_for("performance_dashboard"))
 
-        reviews_rows = conn.execute(
-            """
-            SELECT id, employee_user_id, employee_name, reviewer_username, review_period,
-                   overall_rating, technical_skills_score, communication_score,
-                   productivity_score, teamwork_score, strengths, areas_for_improvement,
-                   comments, created_at
-            FROM performance_reviews
-            WHERE employee_user_id = ?
-            ORDER BY created_at DESC, id DESC
-            """,
-            (user_id,),
-        ).fetchall()
+        reviews_rows = conn.execute(rev_sql, rev_params).fetchall()
         reviews = [dict(row) for row in reviews_rows]
 
         if reviews:
@@ -9828,6 +9854,27 @@ def employee_performance_profile(user_id):
                 {% endfor %}
             {% endif %}
         {% endwith %}
+
+        <div class="card shadow-sm mb-4">
+            <div class="card-body py-3">
+                <form method="get" class="row g-3 align-items-end">
+                    <div class="col-md-4 col-sm-6">
+                        <label class="form-label small fw-semibold text-muted mb-1">From Date</label>
+                        <input type="date" class="form-control form-control-sm" name="from_date" value="{{ from_date or '' }}">
+                    </div>
+                    <div class="col-md-4 col-sm-6">
+                        <label class="form-label small fw-semibold text-muted mb-1">To Date</label>
+                        <input type="date" class="form-control form-control-sm" name="to_date" value="{{ to_date or '' }}">
+                    </div>
+                    <div class="col-md-4 col-sm-12 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm px-3 flex-fill"><i class="bi bi-funnel me-1"></i>Filter Reviews</button>
+                        {% if from_date or to_date %}
+                            <a class="btn btn-outline-secondary btn-sm px-3" href="{{ url_for('employee_performance_profile', user_id=emp.id) }}"><i class="bi bi-x-circle me-1"></i>Clear</a>
+                        {% endif %}
+                    </div>
+                </form>
+            </div>
+        </div>
 
         <div class="card shadow-sm mb-4 border-0 border-start border-primary border-4">
             <div class="card-header bg-white py-3 border-0 d-flex flex-wrap justify-content-between align-items-center gap-2">
@@ -10582,17 +10629,23 @@ def reports_attendance():
         flash("Access denied. Admin privileges required.", "danger")
         return redirect(url_for("dashboard"))
 
-    start_date = request.args.get("start_date", "").strip()
-    end_date = request.args.get("end_date", "").strip()
+    start_date = (request.args.get("start_date") or request.args.get("from_date") or "").strip()
+    end_date = (request.args.get("end_date") or request.args.get("to_date") or "").strip()
+
+    valid_date_range = True
+    if start_date and end_date and start_date > end_date:
+        flash("From Date cannot be after To Date.", "warning")
+        valid_date_range = False
 
     query_where = []
     params = []
-    if start_date:
-        query_where.append("date >= ?")
-        params.append(start_date)
-    if end_date:
-        query_where.append("date <= ?")
-        params.append(end_date)
+    if valid_date_range:
+        if start_date:
+            query_where.append("date >= ?")
+            params.append(start_date)
+        if end_date:
+            query_where.append("date <= ?")
+            params.append(end_date)
 
     where_clause = (" WHERE " + " AND ".join(query_where)) if query_where else ""
 
@@ -10646,6 +10699,17 @@ def reports_attendance():
                 <a class="btn btn-outline-primary" href="{{ url_for('reports_dashboard') }}"><i class="bi bi-arrow-left me-1"></i>Back to Hub</a>
             </div>
         </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
 
         <div class="card shadow-sm border-0 mb-4 report-filter-bar">
             <div class="card-body py-3">
@@ -10850,6 +10914,13 @@ def reports_leave():
 
     selected_status = request.args.get("status", "").strip()
     selected_type = request.args.get("leave_type", "").strip()
+    from_date = (request.args.get("from_date") or request.args.get("start_date") or "").strip()
+    to_date = (request.args.get("to_date") or request.args.get("end_date") or "").strip()
+
+    valid_date_range = True
+    if from_date and to_date and from_date > to_date:
+        flash("From Date cannot be after To Date.", "warning")
+        valid_date_range = False
 
     query_where = []
     params = []
@@ -10859,6 +10930,17 @@ def reports_leave():
     if selected_type:
         query_where.append("leave_type = ?")
         params.append(selected_type)
+
+    if valid_date_range:
+        if from_date and to_date:
+            query_where.append("start_date <= ? AND end_date >= ?")
+            params.extend([to_date, from_date])
+        elif from_date:
+            query_where.append("end_date >= ?")
+            params.append(from_date)
+        elif to_date:
+            query_where.append("start_date <= ?")
+            params.append(to_date)
 
     where_clause = (" WHERE " + " AND ".join(query_where)) if query_where else ""
 
@@ -10907,32 +10989,52 @@ def reports_leave():
             </div>
         </div>
 
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
         <div class="card shadow-sm border-0 mb-4 report-filter-bar">
             <div class="card-body py-3">
                 <form method="GET" action="{{ url_for('reports_leave') }}" class="row g-3 align-items-end">
-                    <div class="col-md-4">
+                    <div class="col-md-3 col-sm-6">
                         <label class="form-label small text-muted mb-1 fw-bold">Filter by Status</label>
-                        <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <select name="status" class="form-select form-select-sm">
                             <option value="">All Statuses</option>
                             <option value="Approved" {% if selected_status == 'Approved' %}selected{% endif %}>Approved</option>
                             <option value="Pending" {% if selected_status == 'Pending' %}selected{% endif %}>Pending</option>
                             <option value="Rejected" {% if selected_status == 'Rejected' %}selected{% endif %}>Rejected</option>
                         </select>
                     </div>
-                    <div class="col-md-4">
+                    <div class="col-md-3 col-sm-6">
                         <label class="form-label small text-muted mb-1 fw-bold">Filter by Leave Type</label>
-                        <select name="leave_type" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <select name="leave_type" class="form-select form-select-sm">
                             <option value="">All Leave Types</option>
                             {% for t in all_types %}
                                 <option value="{{ t }}" {% if selected_type == t %}selected{% endif %}>{{ t }}</option>
                             {% endfor %}
                         </select>
                     </div>
-                    {% if selected_status or selected_type %}
-                        <div class="col-md-2">
-                            <a href="{{ url_for('reports_leave') }}" class="btn btn-sm btn-link text-decoration-none"><i class="bi bi-x-circle me-1"></i>Clear Filters</a>
-                        </div>
-                    {% endif %}
+                    <div class="col-md-2 col-sm-6">
+                        <label class="form-label small text-muted mb-1 fw-bold">From Date</label>
+                        <input type="date" name="from_date" class="form-control form-control-sm" value="{{ from_date or '' }}">
+                    </div>
+                    <div class="col-md-2 col-sm-6">
+                        <label class="form-label small text-muted mb-1 fw-bold">To Date</label>
+                        <input type="date" name="to_date" class="form-control form-control-sm" value="{{ to_date or '' }}">
+                    </div>
+                    <div class="col-md-2 col-sm-12 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm flex-fill"><i class="bi bi-funnel me-1"></i>Apply</button>
+                        {% if selected_status or selected_type or from_date or to_date %}
+                            <a href="{{ url_for('reports_leave') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-x-circle me-1"></i>Clear</a>
+                        {% endif %}
+                    </div>
                 </form>
             </div>
         </div>
@@ -11134,42 +11236,67 @@ def reports_performance():
 
     min_rating = request.args.get("min_rating", "").strip()
     min_val = float(min_rating) if min_rating else 0.0
+    from_date = (request.args.get("from_date") or request.args.get("start_date") or "").strip()
+    to_date = (request.args.get("to_date") or request.args.get("end_date") or "").strip()
+
+    valid_date_range = True
+    if from_date and to_date and from_date > to_date:
+        flash("From Date cannot be after To Date.", "warning")
+        valid_date_range = False
+
+    where_clauses = []
+    params = []
+    if valid_date_range:
+        if from_date and to_date:
+            where_clauses.append("created_at >= ? AND created_at <= ?")
+            params.extend([from_date, to_date + " 23:59:59"])
+        elif from_date:
+            where_clauses.append("created_at >= ?")
+            params.append(from_date)
+        elif to_date:
+            where_clauses.append("created_at <= ?")
+            params.append(to_date + " 23:59:59")
+
+    where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
     with get_db() as conn:
         total_evaluations = conn.execute(
-            "SELECT COUNT(*) FROM performance_reviews"
+            "SELECT COUNT(*) FROM performance_reviews" + where_sql, params
         ).fetchone()[0]
         avg_rating = conn.execute(
-            "SELECT COALESCE(AVG(overall_rating), 0) FROM performance_reviews"
+            "SELECT COALESCE(AVG(overall_rating), 0) FROM performance_reviews" + where_sql, params
         ).fetchone()[0]
-        high_performers = conn.execute(
-            "SELECT COUNT(DISTINCT employee_user_id) FROM performance_reviews WHERE overall_rating >= 4.5"
-        ).fetchone()[0]
+        
+        hp_sql = "SELECT COUNT(DISTINCT employee_user_id) FROM performance_reviews WHERE overall_rating >= 4.5"
+        if where_clauses:
+            hp_sql += " AND " + " AND ".join(where_clauses)
+        high_performers = conn.execute(hp_sql, params).fetchone()[0]
 
         avg_tech = conn.execute(
-            "SELECT COALESCE(AVG(technical_skills_score), 0) FROM performance_reviews"
+            "SELECT COALESCE(AVG(technical_skills_score), 0) FROM performance_reviews" + where_sql, params
         ).fetchone()[0]
         avg_comm = conn.execute(
-            "SELECT COALESCE(AVG(communication_score), 0) FROM performance_reviews"
+            "SELECT COALESCE(AVG(communication_score), 0) FROM performance_reviews" + where_sql, params
         ).fetchone()[0]
         avg_prod = conn.execute(
-            "SELECT COALESCE(AVG(productivity_score), 0) FROM performance_reviews"
+            "SELECT COALESCE(AVG(productivity_score), 0) FROM performance_reviews" + where_sql, params
         ).fetchone()[0]
         avg_team = conn.execute(
-            "SELECT COALESCE(AVG(teamwork_score), 0) FROM performance_reviews"
+            "SELECT COALESCE(AVG(teamwork_score), 0) FROM performance_reviews" + where_sql, params
         ).fetchone()[0]
 
-        top_performers = conn.execute(
-            """
+        top_sql = """
             SELECT employee_name, AVG(overall_rating) AS avg_score, COUNT(*) AS review_count, MAX(created_at) AS last_review
             FROM performance_reviews
-            GROUP BY employee_name
-            HAVING avg_score >= ?
-            ORDER BY avg_score DESC
-            LIMIT 10
-            """,
-            (min_val,),
-        ).fetchall()
+        """
+        top_params = []
+        if where_clauses:
+            top_sql += " WHERE " + " AND ".join(where_clauses)
+            top_params.extend(params)
+        top_sql += " GROUP BY employee_name HAVING avg_score >= ? ORDER BY avg_score DESC LIMIT 10"
+        top_params.append(min_val)
+
+        top_performers = conn.execute(top_sql, top_params).fetchall()
 
     return render_template_string(
         """
@@ -11188,23 +11315,43 @@ def reports_performance():
             </div>
         </div>
 
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
         <div class="card shadow-sm border-0 mb-4 report-filter-bar">
             <div class="card-body py-3">
-                <form method="GET" action="{{ url_for('reports_performance') }}" class="row g-3 align-items-center">
-                    <div class="col-md-4">
+                <form method="GET" action="{{ url_for('reports_performance') }}" class="row g-3 align-items-end">
+                    <div class="col-md-4 col-sm-6">
                         <label class="form-label small text-muted mb-1 fw-bold">Filter Leaderboard by Rating</label>
-                        <select name="min_rating" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <select name="min_rating" class="form-select form-select-sm">
                             <option value="">All Ratings</option>
                             <option value="4.5" {% if min_rating == '4.5' %}selected{% endif %}>4.5+ (High Performers)</option>
                             <option value="4.0" {% if min_rating == '4.0' %}selected{% endif %}>4.0+ (Good Performers)</option>
                             <option value="3.5" {% if min_rating == '3.5' %}selected{% endif %}>3.5+ (Average)</option>
                         </select>
                     </div>
-                    {% if min_rating %}
-                        <div class="col-md-2 mt-4">
-                            <a href="{{ url_for('reports_performance') }}" class="btn btn-sm btn-link text-decoration-none"><i class="bi bi-x-circle me-1"></i>Clear Filter</a>
-                        </div>
-                    {% endif %}
+                    <div class="col-md-3 col-sm-6">
+                        <label class="form-label small text-muted mb-1 fw-bold">From Date</label>
+                        <input type="date" name="from_date" class="form-control form-control-sm" value="{{ from_date or '' }}">
+                    </div>
+                    <div class="col-md-3 col-sm-6">
+                        <label class="form-label small text-muted mb-1 fw-bold">To Date</label>
+                        <input type="date" name="to_date" class="form-control form-control-sm" value="{{ to_date or '' }}">
+                    </div>
+                    <div class="col-md-2 col-sm-6 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm flex-fill"><i class="bi bi-funnel me-1"></i>Apply</button>
+                        {% if min_rating or from_date or to_date %}
+                            <a href="{{ url_for('reports_performance') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-x-circle me-1"></i>Clear</a>
+                        {% endif %}
+                    </div>
                 </form>
             </div>
         </div>
@@ -11719,16 +11866,36 @@ def api_mark_all_notifications_read():
 @app.route("/notifications")
 @login_required
 def user_notifications():
+    from_date = (request.args.get("from_date") or request.args.get("start_date") or "").strip()
+    to_date = (request.args.get("to_date") or request.args.get("end_date") or "").strip()
+
+    valid_date_range = True
+    if from_date and to_date and from_date > to_date:
+        flash("From Date cannot be after To Date.", "warning")
+        valid_date_range = False
+
+    sql = """
+        SELECT id, title, message, link, is_read, created_at
+        FROM notifications
+        WHERE user_id = ?
+    """
+    params = [current_user.id]
+
+    if valid_date_range:
+        if from_date and to_date:
+            sql += " AND created_at >= ? AND created_at <= ?"
+            params.extend([from_date, to_date + " 23:59:59"])
+        elif from_date:
+            sql += " AND created_at >= ?"
+            params.append(from_date)
+        elif to_date:
+            sql += " AND created_at <= ?"
+            params.append(to_date + " 23:59:59")
+
+    sql += " ORDER BY id DESC"
+
     with get_db() as conn:
-        notifications = conn.execute(
-            """
-            SELECT id, title, message, link, is_read, created_at
-            FROM notifications
-            WHERE user_id = ?
-            ORDER BY id DESC
-            """,
-            (current_user.id,),
-        ).fetchall()
+        notifications = conn.execute(sql, params).fetchall()
 
     return render_template_string(
         """
@@ -11743,6 +11910,38 @@ def user_notifications():
             <button type="button" class="btn btn-outline-primary btn-sm" onclick="markAllNotificationsReadPage()">
                 <i class="bi bi-check-all me-1"></i>Mark All as Read
             </button>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="card shadow-sm mb-4">
+            <div class="card-body py-3">
+                <form method="get" class="row g-3 align-items-end">
+                    <div class="col-md-4 col-sm-6">
+                        <label class="form-label small fw-semibold text-muted mb-1">From Date</label>
+                        <input type="date" class="form-control form-control-sm" name="from_date" value="{{ from_date or '' }}">
+                    </div>
+                    <div class="col-md-4 col-sm-6">
+                        <label class="form-label small fw-semibold text-muted mb-1">To Date</label>
+                        <input type="date" class="form-control form-control-sm" name="to_date" value="{{ to_date or '' }}">
+                    </div>
+                    <div class="col-md-4 col-sm-12 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm px-3 flex-fill"><i class="bi bi-funnel me-1"></i>Filter Inbox</button>
+                        {% if from_date or to_date %}
+                            <a class="btn btn-outline-secondary btn-sm px-3" href="{{ url_for('user_notifications') }}"><i class="bi bi-x-circle me-1"></i>Clear</a>
+                        {% endif %}
+                    </div>
+                </form>
+            </div>
         </div>
 
         <div class="card shadow-sm border-0">
