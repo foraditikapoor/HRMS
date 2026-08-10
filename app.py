@@ -8529,23 +8529,43 @@ def apply_leave():
 @app.route("/leave/my-requests", methods=["GET"])
 @login_required
 def my_leave_requests():
+    from_date = (request.args.get("from_date") or request.args.get("start_date") or "").strip()
+    to_date = (request.args.get("to_date") or request.args.get("end_date") or "").strip()
+
+    valid_date_range = True
+    if from_date and to_date and from_date > to_date:
+        flash("From Date cannot be after To Date.", "warning")
+        valid_date_range = False
+
+    query = """
+        SELECT id, user_id, employee_name, leave_type, start_date, end_date,
+               total_days, reason, status, applied_date, approved_by, approval_date,
+               comments, rejection_reason
+        FROM leave_requests
+        WHERE user_id = ?
+    """
+    params = [current_user.id]
+
+    if valid_date_range:
+        if from_date and to_date:
+            query += " AND start_date <= ? AND end_date >= ?"
+            params.extend([to_date, from_date])
+        elif from_date:
+            query += " AND end_date >= ?"
+            params.append(from_date)
+        elif to_date:
+            query += " AND start_date <= ?"
+            params.append(to_date)
+
+    query += " ORDER BY applied_date DESC, id DESC"
+
     with get_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, user_id, employee_name, leave_type, start_date, end_date,
-                   total_days, reason, status, applied_date, approved_by, approval_date,
-                   comments, rejection_reason
-            FROM leave_requests
-            WHERE user_id = ?
-            ORDER BY applied_date DESC, id DESC
-            """,
-            (current_user.id,),
-        ).fetchall()
+        rows = conn.execute(query, params).fetchall()
         requests_list = [dict(row) for row in rows]
         leave_balance = get_user_paid_leave_balance(conn, current_user.id)
 
     if request.is_json or request.headers.get("Accept") == "application/json":
-        return jsonify({"status": "success", "leave_requests": requests_list, "leave_balance": leave_balance})
+        return jsonify({"status": "success", "from_date": from_date, "to_date": to_date, "leave_requests": requests_list, "leave_balance": leave_balance})
 
     return render_template_string(
         """
@@ -8602,6 +8622,27 @@ def my_leave_requests():
                         <div class="fs-4 fw-bold text-success">{{ leave_balance.remaining }} <span class="fs-6 text-muted">days</span></div>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <div class="card shadow-sm mb-4">
+            <div class="card-body py-3">
+                <form method="get" class="row g-3 align-items-end">
+                    <div class="col-md-4 col-sm-6">
+                        <label class="form-label small fw-semibold text-muted mb-1">From Date</label>
+                        <input type="date" class="form-control form-control-sm" name="from_date" value="{{ from_date or '' }}">
+                    </div>
+                    <div class="col-md-4 col-sm-6">
+                        <label class="form-label small fw-semibold text-muted mb-1">To Date</label>
+                        <input type="date" class="form-control form-control-sm" name="to_date" value="{{ to_date or '' }}">
+                    </div>
+                    <div class="col-md-4 col-sm-12 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm px-3 flex-fill"><i class="bi bi-funnel me-1"></i>Apply Filter</button>
+                        {% if from_date or to_date %}
+                            <a class="btn btn-outline-secondary btn-sm px-3" href="{{ url_for('my_leave_requests') }}"><i class="bi bi-x-circle me-1"></i>Clear</a>
+                        {% endif %}
+                    </div>
+                </form>
             </div>
         </div>
 
@@ -8925,6 +8966,14 @@ def view_all_leave_requests():
         return redirect(url_for("dashboard"))
 
     status_filter = (request.args.get("status") or "All").strip()
+    from_date = (request.args.get("from_date") or request.args.get("start_date") or "").strip()
+    to_date = (request.args.get("to_date") or request.args.get("end_date") or "").strip()
+
+    valid_date_range = True
+    if from_date and to_date and from_date > to_date:
+        flash("From Date cannot be after To Date.", "warning")
+        valid_date_range = False
+
     query = """
         SELECT id, user_id, employee_name, leave_type, start_date, end_date,
                total_days, reason, status, applied_date, approved_by, approval_date,
@@ -8937,6 +8986,17 @@ def view_all_leave_requests():
         query += " AND status = ?"
         params.append(status_filter)
 
+    if valid_date_range:
+        if from_date and to_date:
+            query += " AND start_date <= ? AND end_date >= ?"
+            params.extend([to_date, from_date])
+        elif from_date:
+            query += " AND end_date >= ?"
+            params.append(from_date)
+        elif to_date:
+            query += " AND start_date <= ?"
+            params.append(to_date)
+
     query += " ORDER BY applied_date DESC, id DESC"
 
     with get_db() as conn:
@@ -8948,6 +9008,8 @@ def view_all_leave_requests():
             {
                 "status": "success",
                 "status_filter": status_filter,
+                "from_date": from_date,
+                "to_date": to_date,
                 "leave_requests": requests_list,
             }
         )
@@ -8981,12 +9043,10 @@ def view_all_leave_requests():
 
         <div class="card shadow-sm mb-4">
             <div class="card-body py-3">
-                <form method="get" class="row g-3 align-items-center">
-                    <div class="col-auto">
-                        <label class="col-form-label fw-semibold">Status Filter:</label>
-                    </div>
-                    <div class="col-auto">
-                        <select class="form-select" name="status" onchange="this.form.submit()">
+                <form method="get" class="row g-3 align-items-end">
+                    <div class="col-md-3 col-sm-6">
+                        <label class="form-label small fw-semibold text-muted mb-1">Status Filter</label>
+                        <select class="form-select form-select-sm" name="status">
                             <option value="All" {% if status_filter == 'All' %}selected{% endif %}>All Statuses</option>
                             <option value="Pending" {% if status_filter == 'Pending' %}selected{% endif %}>Pending</option>
                             <option value="Approved" {% if status_filter == 'Approved' %}selected{% endif %}>Approved</option>
@@ -8994,11 +9054,20 @@ def view_all_leave_requests():
                             <option value="Cancelled" {% if status_filter == 'Cancelled' %}selected{% endif %}>Cancelled</option>
                         </select>
                     </div>
-                    {% if status_filter != 'All' %}
-                        <div class="col-auto">
-                            <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('view_all_leave_requests') }}">Reset Filter</a>
-                        </div>
-                    {% endif %}
+                    <div class="col-md-3 col-sm-6">
+                        <label class="form-label small fw-semibold text-muted mb-1">From Date</label>
+                        <input type="date" class="form-control form-control-sm" name="from_date" value="{{ from_date or '' }}">
+                    </div>
+                    <div class="col-md-3 col-sm-6">
+                        <label class="form-label small fw-semibold text-muted mb-1">To Date</label>
+                        <input type="date" class="form-control form-control-sm" name="to_date" value="{{ to_date or '' }}">
+                    </div>
+                    <div class="col-md-3 col-sm-6 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm px-3 flex-fill"><i class="bi bi-funnel me-1"></i>Apply</button>
+                        {% if status_filter != 'All' or from_date or to_date %}
+                            <a class="btn btn-outline-secondary btn-sm px-3" href="{{ url_for('view_all_leave_requests') }}"><i class="bi bi-x-circle me-1"></i>Clear</a>
+                        {% endif %}
+                    </div>
                 </form>
             </div>
         </div>
@@ -9069,6 +9138,8 @@ def view_all_leave_requests():
         """,
         requests=requests_list,
         status_filter=status_filter,
+        from_date=from_date,
+        to_date=to_date,
     )
 
 
