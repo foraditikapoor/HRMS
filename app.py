@@ -7100,18 +7100,85 @@ def admin_clients():
         ).fetchall()
     return render_template_string(
         """
-        <!doctype html>
-        <html lang="en">
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Client Management</title>
-            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-        </head>
-        <body class="bg-light">
-        <div class="container py-5"><div class="d-flex align-items-center mb-3"><a class="btn btn-outline-secondary me-3" href="{{ url_for('dashboard') }}">Back</a><h1 class="h3 me-auto mb-0">Client Management</h1><a class="btn btn-success" href="{{ url_for('add_client') }}">Add New Client</a></div><div class="card shadow-sm"><div class="card-body"><div class="table-responsive"><table class="table table-striped align-middle mb-0"><thead><tr><th>Client Name</th><th>City</th><th>Services</th><th>Contact</th><th>Actions</th></tr></thead><tbody>{% for client in clients %}<tr><td>{{ client.name }}</td><td>{{ client.city or '' }}</td><td>{{ client.services or '' }}</td><td>{{ client.contact_number or '' }}</td><td><a class="btn btn-sm btn-primary" href="{{ url_for('edit_client', client_id=client.id) }}">View</a><a class="btn btn-sm btn-secondary" href="{{ url_for('edit_client', client_id=client.id) }}">Edit</a><form method="post" action="{{ url_for('delete_client', client_id=client.id) }}" class="d-inline"><button class="btn btn-sm btn-danger">Delete</button></form></td></tr>{% else %}<tr><td colspan="5"><div class="alert alert-info mb-0">No clients found.</div></td></tr>{% endfor %}</tbody></table></div></div></div></div>
-        </body>
-        </html>
+        {% extends "base.html" %}
+        {% block title %}Client Management{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>Client Management</h1>
+                <p>Overview client directory, services, location, and contact information.</p>
+            </div>
+            <div>
+                <a class="btn btn-primary" href="{{ url_for('add_client') }}"><i class="bi bi-plus-lg me-1"></i>Add New Client</a>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0 fw-bold"><i class="bi bi-building me-2 text-primary"></i>Client Directory</h5>
+                <span class="badge bg-light text-dark border">Total Clients: {{ clients|length }}</span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Client Name</th>
+                                <th>City</th>
+                                <th>Services</th>
+                                <th>Contact Number</th>
+                                <th>Email</th>
+                                <th class="text-end">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for client in clients %}
+                            <tr>
+                                <td>
+                                    <strong class="text-dark">{{ client.name }}</strong>
+                                    {% if client.gst_number %}<small class="d-block text-muted">GST: {{ client.gst_number }}</small>{% endif %}
+                                </td>
+                                <td>{{ client.city or '-' }}</td>
+                                <td>
+                                    {% if client.services %}
+                                        <span class="badge bg-primary-subtle text-primary border border-primary-subtle">{{ client.services }}</span>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ client.contact_number or '-' }}</td>
+                                <td>{{ client.email or '-' }}</td>
+                                <td class="text-end">
+                                    <a class="btn btn-sm btn-outline-primary me-1" href="{{ url_for('edit_client', client_id=client.id) }}"><i class="bi bi-pencil me-1"></i>Edit</a>
+                                    <form method="post" action="{{ url_for('delete_client', client_id=client.id) }}" class="d-inline" onsubmit="return confirm('Are you sure you want to delete this client?');">
+                                        <button class="btn btn-sm btn-outline-danger" type="submit"><i class="bi bi-trash me-1"></i>Delete</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="6" class="text-center py-4 text-muted">
+                                    <i class="bi bi-building-exclamation fs-3 d-block mb-2"></i>No clients found.
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endblock %}
     """,
         clients=clients,
     )
@@ -7120,18 +7187,78 @@ def admin_clients():
 def render_client_form(client=None):
     return render_template_string(
         """
-        <!doctype html>
-        <html lang="en">
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>{{ 'Edit Client' if client else 'Add Client' }}</title>
-            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-        </head>
-        <body class="bg-light">
-        <div class="container py-5"><div class="row justify-content-center"><div class="col-lg-9"><div class="card shadow-sm"><div class="card-body"><div class="d-flex align-items-center mb-3"><a class="btn btn-outline-secondary me-3" href="{{ url_for('admin_clients') }}">Back</a><h1 class="h3 mb-0">{{ 'Edit Client' if client else 'Add New Client' }}</h1></div><form method="post"><div class="row"><div class="col-md-6 mb-3"><label class="form-label">Client Name</label><input class="form-control" name="name" value="{{ client.name if client else '' }}" required></div><div class="col-md-6 mb-3"><label class="form-label">City</label><input class="form-control" name="city" value="{{ client.city if client else '' }}"></div><div class="col-12 mb-3"><label class="form-label">Client Address</label><textarea class="form-control" name="address" rows="3">{{ client.address if client else '' }}</textarea></div><div class="col-md-6 mb-3"><label class="form-label">Services</label><input class="form-control" name="services" value="{{ client.services if client else '' }}"></div><div class="col-md-6 mb-3"><label class="form-label">GST Number</label><input class="form-control" name="gst_number" value="{{ client.gst_number if client else '' }}"></div><div class="col-md-6 mb-3"><label class="form-label">Contact Number</label><input class="form-control" name="contact_number" value="{{ client.contact_number if client else '' }}"></div><div class="col-md-6 mb-3"><label class="form-label">Email</label><input class="form-control" type="email" name="email" value="{{ client.email if client else '' }}"></div></div><button class="btn btn-primary" type="submit">Save Client</button><a class="btn btn-outline-secondary ms-2" href="{{ url_for('admin_clients') }}">Cancel</a></form></div></div></div></div></div>
-        </body>
-        </html>
+        {% extends "base.html" %}
+        {% block title %}{{ 'Edit Client' if client else 'Add Client' }}{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>{{ 'Edit Client' if client else 'Add New Client' }}</h1>
+                <p>{{ 'Update existing client profile details.' if client else 'Add a new client organization profile.' }}</p>
+            </div>
+            <div>
+                <a class="btn btn-outline-secondary" href="{{ url_for('admin_clients') }}"><i class="bi bi-arrow-left me-1"></i>Back to Clients</a>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="row justify-content-center">
+            <div class="col-lg-9">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-white py-3 border-0">
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-building-add me-2 text-primary"></i>Client Details</h5>
+                    </div>
+                    <div class="card-body">
+                        <form method="post">
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">Client Name <span class="text-danger">*</span></label>
+                                    <input class="form-control" name="name" value="{{ client.name if client else '' }}" required placeholder="e.g. Acme Corporation">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">City</label>
+                                    <input class="form-control" name="city" value="{{ client.city if client else '' }}" placeholder="e.g. Mumbai">
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label fw-semibold">Client Address</label>
+                                    <textarea class="form-control" name="address" rows="3" placeholder="Full business address">{{ client.address if client else '' }}</textarea>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">Services</label>
+                                    <input class="form-control" name="services" value="{{ client.services if client else '' }}" placeholder="e.g. SEO, Social Media, Web Dev">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">GST Number</label>
+                                    <input class="form-control" name="gst_number" value="{{ client.gst_number if client else '' }}" placeholder="e.g. 27AAAAA0000A1Z5">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">Contact Number</label>
+                                    <input class="form-control" name="contact_number" value="{{ client.contact_number if client else '' }}" placeholder="e.g. +91 9876543210">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold">Email Address</label>
+                                    <input class="form-control" type="email" name="email" value="{{ client.email if client else '' }}" placeholder="contact@acme.com">
+                                </div>
+                            </div>
+                            <div class="mt-4 d-flex gap-2">
+                                <button class="btn btn-primary" type="submit"><i class="bi bi-check-circle me-1"></i>Save Client</button>
+                                <a class="btn btn-outline-secondary" href="{{ url_for('admin_clients') }}">Cancel</a>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endblock %}
     """,
         client=client,
     )
@@ -7265,115 +7392,127 @@ def admin_projects():
 
     return render_template_string(
         """
-        <!doctype html>
-        <html lang="en">
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Project Management</title>
-            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-        </head>
-        <body class="bg-light">
-            <div class="container py-5">
-                <div class="d-flex align-items-center mb-3">
-                    <a class="btn btn-outline-secondary me-3" href="{{ url_for('dashboard') }}">Back</a>
-                    <h1 class="h3 me-auto mb-0">Project Management</h1>
-                    <a class="btn btn-success" href="{{ url_for('add_project') }}">Add Project</a>
-                </div>
-                <div class="card shadow-sm">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-                            <div class="text-muted">Total Projects: {{ total_projects }}</div>
-                            <form class="row g-2 align-items-end" method="get">
-                                <div class="col">
-                                    <label class="form-label small mb-1" for="search">Search</label>
-                                    <input class="form-control" id="search" name="search" type="text" value="{{ search }}" placeholder="Client, employee, email, WhatsApp">
-                                </div>
-                                <div class="col">
-                                    <label class="form-label small mb-1" for="service_filter">Services</label>
-                                    <select class="form-select" id="service_filter" name="service_filter">
-                                        <option value="All" {% if service_filter == 'All' %}selected{% endif %}>All</option>
-                                        <option value="Social Media" {% if service_filter == 'Social Media' %}selected{% endif %}>Social Media</option>
-                                        <option value="SEO" {% if service_filter == 'SEO' %}selected{% endif %}>SEO</option>
-                                        <option value="Meta Ads" {% if service_filter == 'Meta Ads' %}selected{% endif %}>Meta Ads</option>
-                                        <option value="Google Ads" {% if service_filter == 'Google Ads' %}selected{% endif %}>Google Ads</option>
-                                        <option value="Website Development" {% if service_filter == 'Website Development' %}selected{% endif %}>Website Development</option>
-                                    </select>
-                                </div>
-                                <div class="col-auto">
-                                    <button class="btn btn-primary" type="submit">Filter</button>
-                                </div>
-                                <div class="col-auto">
-                                    <a class="btn btn-outline-secondary" href="{{ url_for('admin_projects') }}">Reset</a>
-                                </div>
-                            </form>
-                        </div>
-                        <div class="table-responsive">
-                            <table class="table table-striped align-middle">
-                                <thead>
-                                    <tr>
-                                        <th>Client Name</th>
-                                        <th>Assigned Employee</th>
-                                        <th>Services</th>
-                                        <th>Client Email</th>
-                                        <th>Client WhatsApp Number</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                {% if projects %}
-                                    {% for project in projects %}
-                                        <tr>
-                                            <td>{{ project.client_name or 'No Client Assigned' }}</td>
-                                            <td>{{ project.assigned_to or '' }}</td>
-                                            <td>{{ project.services or '' }}</td>
-                                            <td>{{ project.client_email or '' }}</td>
-                                            <td>{{ project.whatsapp_number or '' }}</td>
-                                            <td>
-                                                <a class="btn btn-sm btn-primary" href="{{ url_for('view_project', project_id=project.id) }}">View</a>
-                                                <a class="btn btn-sm btn-secondary" href="{{ url_for('edit_project', project_id=project.id) }}">Edit</a>
-                                                <a class="btn btn-sm btn-danger" href="{{ url_for('delete_project', project_id=project.id) }}">Delete</a>
-                                            </td>
-                                        </tr>
-                                    {% endfor %}
-                                {% else %}
-                                    <tr>
-                                        <td colspan="6">
-                                            <div class="alert alert-info mb-0">
-                                                {% if search or service_filter != 'All' %}
-                                                    No matching projects found.
-                                                {% else %}
-                                                    No projects found.
-                                                {% endif %}
-                                            </div>
-                                        </td>
-                                    </tr>
-                                {% endif %}
-                                </tbody>
-                            </table>
-                        </div>
-                        {% if total_pages > 1 %}
-                        <nav aria-label="Project pagination">
-                            <ul class="pagination justify-content-center mb-0">
-                                <li class="page-item {% if page <= 1 %}disabled{% endif %}">
-                                    <a class="page-link" href="{{ url_for('admin_projects', page=page-1, search=search or None, service_filter=service_filter if service_filter != 'All' else None) }}">Previous</a>
-                                </li>
-                                {% for page_num in range(1, total_pages + 1) %}
-                                <li class="page-item {% if page_num == page %}active{% endif %}">
-                                    <a class="page-link" href="{{ url_for('admin_projects', page=page_num, search=search or None, service_filter=service_filter if service_filter != 'All' else None) }}">{{ page_num }}</a>
-                                </li>
-                                {% endfor %}
-                                <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
-                                    <a class="page-link" href="{{ url_for('admin_projects', page=page+1, search=search or None, service_filter=service_filter if service_filter != 'All' else None) }}">Next</a>
-                                </li>
-                            </ul>
-                        </nav>
-                        {% endif %}
-                    </div>
-                </div>
+        {% extends "base.html" %}
+        {% block title %}Project Management{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>Project Management</h1>
+                <p>Track client projects, service allocations, assigned employees, and deliverables.</p>
             </div>
-        </body>
-        </html>
+            <div>
+                <a class="btn btn-primary" href="{{ url_for('add_project') }}"><i class="bi bi-plus-lg me-1"></i>Add Project</a>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                    <div class="fw-semibold text-muted">Total Projects: {{ total_projects }}</div>
+                    <form class="row g-2 align-items-end" method="get">
+                        <div class="col">
+                            <label class="form-label small mb-1" for="search">Search</label>
+                            <input class="form-control" id="search" name="search" type="text" value="{{ search }}" placeholder="Client, employee, email, WhatsApp">
+                        </div>
+                        <div class="col">
+                            <label class="form-label small mb-1" for="service_filter">Services</label>
+                            <select class="form-select" id="service_filter" name="service_filter">
+                                <option value="All" {% if service_filter == 'All' %}selected{% endif %}>All Services</option>
+                                <option value="Social Media" {% if service_filter == 'Social Media' %}selected{% endif %}>Social Media</option>
+                                <option value="SEO" {% if service_filter == 'SEO' %}selected{% endif %}>SEO</option>
+                                <option value="Meta Ads" {% if service_filter == 'Meta Ads' %}selected{% endif %}>Meta Ads</option>
+                                <option value="Google Ads" {% if service_filter == 'Google Ads' %}selected{% endif %}>Google Ads</option>
+                                <option value="Website Development" {% if service_filter == 'Website Development' %}selected{% endif %}>Website Development</option>
+                            </select>
+                        </div>
+                        <div class="col-auto">
+                            <button class="btn btn-primary" type="submit"><i class="bi bi-funnel me-1"></i>Filter</button>
+                        </div>
+                        <div class="col-auto">
+                            <a class="btn btn-outline-secondary" href="{{ url_for('admin_projects') }}">Reset</a>
+                        </div>
+                    </form>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Client Name</th>
+                                <th>Assigned Employee</th>
+                                <th>Services</th>
+                                <th>Client Email</th>
+                                <th>Client WhatsApp Number</th>
+                                <th class="text-end">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {% if projects %}
+                            {% for project in projects %}
+                                <tr>
+                                    <td><strong class="text-dark">{{ project.client_name or 'No Client Assigned' }}</strong></td>
+                                    <td>{{ project.assigned_to or '-' }}</td>
+                                    <td>
+                                        {% if project.services %}
+                                            <span class="badge bg-primary-subtle text-primary border border-primary-subtle">{{ project.services }}</span>
+                                        {% else %}
+                                            <span class="text-muted">-</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ project.client_email or '-' }}</td>
+                                    <td>{{ project.whatsapp_number or '-' }}</td>
+                                    <td class="text-end">
+                                        <a class="btn btn-sm btn-outline-info me-1" href="{{ url_for('view_project', project_id=project.id) }}"><i class="bi bi-eye me-1"></i>View</a>
+                                        <a class="btn btn-sm btn-outline-primary me-1" href="{{ url_for('edit_project', project_id=project.id) }}"><i class="bi bi-pencil me-1"></i>Edit</a>
+                                        <a class="btn btn-sm btn-outline-danger" href="{{ url_for('delete_project', project_id=project.id) }}" onclick="return confirm('Are you sure you want to delete this project?');"><i class="bi bi-trash me-1"></i>Delete</a>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        {% else %}
+                            <tr>
+                                <td colspan="6" class="text-center py-4 text-muted">
+                                    <i class="bi bi-kanban fs-3 d-block mb-2"></i>
+                                    {% if search or service_filter != 'All' %}
+                                        No matching projects found.
+                                    {% else %}
+                                        No projects found.
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endif %}
+                        </tbody>
+                    </table>
+                </div>
+                {% if total_pages > 1 %}
+                <nav aria-label="Project pagination" class="mt-3">
+                    <ul class="pagination justify-content-center mb-0">
+                        <li class="page-item {% if page <= 1 %}disabled{% endif %}">
+                            <a class="page-link" href="{{ url_for('admin_projects', page=page-1, search=search or None, service_filter=service_filter if service_filter != 'All' else None) }}">Previous</a>
+                        </li>
+                        {% for page_num in range(1, total_pages + 1) %}
+                        <li class="page-item {% if page_num == page %}active{% endif %}">
+                            <a class="page-link" href="{{ url_for('admin_projects', page=page_num, search=search or None, service_filter=service_filter if service_filter != 'All' else None) }}">{{ page_num }}</a>
+                        </li>
+                        {% endfor %}
+                        <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
+                            <a class="page-link" href="{{ url_for('admin_projects', page=page+1, search=search or None, service_filter=service_filter if service_filter != 'All' else None) }}">Next</a>
+                        </li>
+                    </ul>
+                </nav>
+                {% endif %}
+            </div>
+        </div>
+        {% endblock %}
         """,
         projects=projects,
         total_projects=total_projects,
@@ -7387,7 +7526,81 @@ def admin_projects():
 def render_project_form(project=None, clients=None, employees=None):
     return render_template_string(
         """
-        <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{ 'Edit Project' if project else 'Add Project' }}</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light"><div class="container py-5"><div class="card shadow-sm mx-auto" style="max-width: 900px;"><div class="card-body"><div class="d-flex align-items-center mb-3"><a class="btn btn-outline-secondary me-3" href="{{ url_for('admin_projects') }}">Back</a><h1 class="h3 mb-0">{{ 'Edit Project' if project else 'Add Project' }}</h1></div><form method="post"><div class="mb-3"><label class="form-label">Client</label><select class="form-select" name="client_id" required><option value="">Select client</option>{% for client in clients %}<option value="{{ client.id }}" {% if project and client.id == project.client_id %}selected{% endif %}>{{ client.name }}</option>{% endfor %}</select></div><div class="mb-3"><label class="form-label">Services</label><br>{% for service in ['Social Media', 'SEO', 'Meta Ads', 'Google Ads', 'Website Development'] %}<label class="form-check form-check-inline"><input class="form-check-input" type="checkbox" name="services" value="{{ service }}" {% if project and service in current_services %}checked{% endif %}> {{ service }}</label>{% endfor %}</div><div class="mb-3"><label class="form-label">Assigned To</label><select class="form-select" name="assigned_to" required><option value="">Select employee</option>{% for employee in employees %}<option value="{{ employee.name }}" {% if project and employee.name == project.assigned_to %}selected{% endif %}>{{ employee.name }}</option>{% endfor %}</select></div><div class="mb-3"><label class="form-label">Delivery Details</label><textarea class="form-control" name="delivery_details" rows="3" required>{{ project.delivery_details if project else '' }}</textarea></div><button class="btn btn-primary" type="submit">{{ 'Save Changes' if project else 'Save Project' }}</button></form></div></div></div></body></html>
+        {% extends "base.html" %}
+        {% block title %}{{ 'Edit Project' if project else 'Add Project' }}{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>{{ 'Edit Project' if project else 'Add New Project' }}</h1>
+                <p>{{ 'Update project assignment and deliverables.' if project else 'Create a new client project record.' }}</p>
+            </div>
+            <div>
+                <a class="btn btn-outline-secondary" href="{{ url_for('admin_projects') }}"><i class="bi bi-arrow-left me-1"></i>Back to Projects</a>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="row justify-content-center">
+            <div class="col-lg-9">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-white py-3 border-0">
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-kanban me-2 text-primary"></i>Project Form</h5>
+                    </div>
+                    <div class="card-body">
+                        <form method="post">
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Client <span class="text-danger">*</span></label>
+                                <select class="form-select" name="client_id" required>
+                                    <option value="">Select client</option>
+                                    {% for client in clients %}
+                                        <option value="{{ client.id }}" {% if project and client.id == project.client_id %}selected{% endif %}>{{ client.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Services <span class="text-danger">*</span></label>
+                                <div class="d-flex flex-wrap gap-3 p-3 bg-light rounded border">
+                                    {% for service in ['Social Media', 'SEO', 'Meta Ads', 'Google Ads', 'Website Development'] %}
+                                        <label class="form-check form-check-inline mb-0">
+                                            <input class="form-check-input" type="checkbox" name="services" value="{{ service }}" {% if project and service in current_services %}checked{% endif %}>
+                                            <span class="form-check-label">{{ service }}</span>
+                                        </label>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Assigned Employee <span class="text-danger">*</span></label>
+                                <select class="form-select" name="assigned_to" required>
+                                    <option value="">Select employee</option>
+                                    {% for employee in employees %}
+                                        <option value="{{ employee.name }}" {% if project and employee.name == project.assigned_to %}selected{% endif %}>{{ employee.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Delivery Details <span class="text-danger">*</span></label>
+                                <textarea class="form-control" name="delivery_details" rows="3" required placeholder="Describe milestones, deliverables, or links...">{{ project.delivery_details if project else '' }}</textarea>
+                            </div>
+                            <div class="mt-4 d-flex gap-2">
+                                <button class="btn btn-primary" type="submit"><i class="bi bi-check-circle me-1"></i>{{ 'Save Changes' if project else 'Save Project' }}</button>
+                                <a class="btn btn-outline-secondary" href="{{ url_for('admin_projects') }}">Cancel</a>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endblock %}
     """,
         project=project,
         clients=clients,
@@ -7610,29 +7823,71 @@ def view_project(project_id):
         return redirect(url_for("admin_projects"))
     return render_template_string(
         """
-        <!doctype html>
-        <html lang="en">
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>View Project</title>
-            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-        </head>
-        <body class="bg-light">
-            <div class="container py-5">
-                <div class="card shadow-sm mx-auto" style="max-width: 700px;">
+        {% extends "base.html" %}
+        {% block title %}View Project{% endblock %}
+        {% block page_content %}
+        <div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+            <div>
+                <h1>Project Overview</h1>
+                <p>Detailed project information and linked client contact record.</p>
+            </div>
+            <div>
+                <a class="btn btn-outline-secondary" href="{{ url_for('admin_projects') }}"><i class="bi bi-arrow-left me-1"></i>Back to Projects</a>
+                <a class="btn btn-primary ms-2" href="{{ url_for('edit_project', project_id=project.id) }}"><i class="bi bi-pencil me-1"></i>Edit Project</a>
+            </div>
+        </div>
+
+        <div class="row justify-content-center">
+            <div class="col-lg-8">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-white py-3 border-0">
+                        <h5 class="card-title mb-0 fw-bold"><i class="bi bi-kanban me-2 text-primary"></i>Project Summary</h5>
+                    </div>
                     <div class="card-body">
-                        <div class="d-flex align-items-center mb-3">
-                            <a class="btn btn-outline-secondary me-3" href="{{ url_for('admin_projects') }}">Back</a>
-                            <h1 class="h3 mb-0">View Project</h1>
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label text-muted small mb-0">Linked Client</label>
+                                <div class="fw-bold text-dark fs-6">{{ project.linked_client_name or 'No Client Assigned' }}</div>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label text-muted small mb-0">Assigned Employee</label>
+                                <div class="fw-bold text-dark fs-6">{{ project.assigned_to or 'Unassigned' }}</div>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label text-muted small mb-0">Services Provided</label>
+                                <div>
+                                    {% if project.services %}
+                                        <span class="badge bg-primary-subtle text-primary border border-primary-subtle fs-7">{{ project.services }}</span>
+                                    {% else %}
+                                        <span class="text-muted">None specified</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label text-muted small mb-0">Deliverables / Details</label>
+                                <div class="p-3 bg-light rounded border text-dark">{{ project.delivery_details or 'No delivery details specified.' }}</div>
+                            </div>
+                            {% if project.linked_client_name %}
+                            <div class="col-12"><hr class="my-2"></div>
+                            <div class="col-md-6">
+                                <label class="form-label text-muted small mb-0">Client Email</label>
+                                <div>{{ project.linked_client_email or '-' }}</div>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label text-muted small mb-0">Client Contact</label>
+                                <div>{{ project.linked_client_contact or '-' }}</div>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label text-muted small mb-0">Client Address</label>
+                                <div>{{ project.linked_client_address or '' }}{% if project.linked_client_city %}, {{ project.linked_client_city }}{% endif %}</div>
+                            </div>
+                            {% endif %}
                         </div>
-                        <p><strong>Client:</strong> {{ project.linked_client_name or 'No Client Assigned' }}</p>
-                        {% if project.linked_client_name %}<p><strong>Address:</strong> {{ project.linked_client_address or '' }}{% if project.linked_client_city %}, {{ project.linked_client_city }}{% endif %}</p><p><strong>Email:</strong> {{ project.linked_client_email or '' }}</p><p><strong>Contact:</strong> {{ project.linked_client_contact or '' }}</p>{% endif %}
                     </div>
                 </div>
             </div>
-        </body>
-        </html>
+        </div>
+        {% endblock %}
         """,
         project=project,
     )

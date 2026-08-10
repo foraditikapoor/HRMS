@@ -430,8 +430,71 @@
       searchResults.classList.remove('d-none');
     }
 
-    function renderResults(results, query) {
-      if (!results || results.length === 0) {
+    function findCurrentPageMatches(query) {
+      if (!query || query.length < 2) return [];
+      const matches = [];
+      const pageContent = document.querySelector('.page-content');
+      if (!pageContent) return matches;
+
+      const lowerQuery = query.toLowerCase();
+      const candidates = pageContent.querySelectorAll('tr, .card, .list-group-item, h1, h2, h3, h4, h5');
+      const seenNodes = new Set();
+      let matchCounter = 0;
+
+      for (let i = 0; i < candidates.length; i++) {
+        const el = candidates[i];
+        if (el.offsetParent === null || searchResults.contains(el)) continue;
+
+        const text = el.innerText || el.textContent || '';
+        if (!text || !text.toLowerCase().includes(lowerQuery)) continue;
+
+        let isParentOfSeen = false;
+        seenNodes.forEach((seen) => {
+          if (el.contains(seen) && el !== seen) {
+            isParentOfSeen = true;
+          }
+        });
+        if (isParentOfSeen) continue;
+
+        seenNodes.add(el);
+        matchCounter++;
+        const domId = 'match-' + matchCounter + '-' + Math.random().toString(36).substring(2, 7);
+        el.setAttribute('data-search-match-id', domId);
+
+        let cleanText = text.replace(/\s+/g, ' ').trim();
+        let titleSnippet = cleanText;
+        if (titleSnippet.length > 55) {
+          titleSnippet = titleSnippet.substring(0, 55) + '...';
+        }
+
+        let contextTag = 'On Page';
+        if (el.tagName === 'TR') contextTag = 'Table Row';
+        else if (el.classList.contains('card')) contextTag = 'Card Block';
+        else if (el.tagName.startsWith('H')) contextTag = 'Heading';
+        else if (el.classList.contains('list-group-item')) contextTag = 'List Entry';
+
+        matches.push({
+          category: 'ON THIS PAGE',
+          title: titleSnippet,
+          sub: `${contextTag} match on current view`,
+          icon: 'bi-eye',
+          bg_class: 'bg-primary-subtle text-primary',
+          badge_class: 'bg-primary text-white',
+          url: 'javascript:void(0)',
+          isDomMatch: true,
+          domMatchId: domId
+        });
+
+        if (matches.length >= 4) break;
+      }
+
+      return matches;
+    }
+
+    function renderResults(domMatches, apiResults, query) {
+      const combined = [...(domMatches || []), ...(apiResults || [])];
+
+      if (combined.length === 0) {
         searchResults.innerHTML = '<div class="search-no-results"><i class="bi bi-search me-2 text-muted"></i>No results found</div>';
         searchResults.classList.remove('d-none');
         selectedIndex = -1;
@@ -441,13 +504,14 @@
       let html = '';
       let currentCategory = '';
 
-      results.forEach((item, index) => {
+      combined.forEach((item, index) => {
         if (item.category !== currentCategory) {
           currentCategory = item.category;
           html += `<div class="search-section-header">${escapeHtml(currentCategory)}</div>`;
         }
+        const domAttr = item.isDomMatch ? `data-dom-match="true" data-dom-id="${escapeHtml(item.domMatchId)}"` : '';
         html += `
-          <a href="${escapeHtml(item.url)}" class="search-result-item" data-index="${index}">
+          <a href="${escapeHtml(item.url)}" class="search-result-item" data-index="${index}" ${domAttr}>
             <div class="search-result-icon ${item.bg_class || 'bg-light'}">
               <i class="bi ${escapeHtml(item.icon || 'bi-search')}"></i>
             </div>
@@ -473,20 +537,41 @@
       }
 
       showLoading();
+      const domMatches = findCurrentPageMatches(q);
+
       fetch('/api/search?q=' + encodeURIComponent(q))
         .then(res => res.json())
         .then(data => {
-          if (data && data.results) {
-            renderResults(data.results, q);
-          } else {
-            renderResults([], q);
-          }
+          const apiResults = (data && data.results) ? data.results : [];
+          renderResults(domMatches, apiResults, q);
         })
         .catch(err => {
           console.error('Global search failed:', err);
-          searchResults.innerHTML = '<div class="search-no-results text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Search error</div>';
+          renderResults(domMatches, [], q);
         });
     }
+
+    searchResults.addEventListener('click', (e) => {
+      const itemEl = e.target.closest('.search-result-item');
+      if (!itemEl) return;
+
+      const isDom = itemEl.getAttribute('data-dom-match') === 'true';
+      const domId = itemEl.getAttribute('data-dom-id');
+
+      if (isDom && domId) {
+        e.preventDefault();
+        e.stopPropagation();
+        hideDropdown();
+
+        const targetNode = document.querySelector(`[data-search-match-id="${domId}"]`);
+        if (targetNode) {
+          targetNode.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          targetNode.classList.remove('search-highlight-pulse');
+          void targetNode.offsetWidth;
+          targetNode.classList.add('search-highlight-pulse');
+        }
+      }
+    });
 
     searchInput.addEventListener('input', () => {
       clearTimeout(debounceTimer);

@@ -845,6 +845,27 @@ body { margin: 0; background: var(--canvas); color: var(--ink); font-family: Int
     position: relative;
 }
 
+@keyframes searchPulseHighlight {
+    0% {
+        background-color: rgba(99, 102, 241, 0.3);
+        box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.4);
+    }
+    60% {
+        background-color: rgba(99, 102, 241, 0.15);
+        box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.3);
+    }
+    100% {
+        background-color: transparent;
+        box-shadow: none;
+    }
+}
+
+.search-highlight-pulse {
+    animation: searchPulseHighlight 2.5s ease-out forwards;
+    border-radius: 6px;
+    transition: all 0.3s ease;
+}
+
 .global-search-dropdown {
     position: absolute;
     top: calc(100% + 8px);
