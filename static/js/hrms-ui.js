@@ -408,5 +408,162 @@
       }
     });
   });
+
+  // Global Topbar Search Handler
+  document.addEventListener('DOMContentLoaded', () => {
+    const searchForm = document.getElementById('globalSearchForm');
+    const searchInput = document.getElementById('globalSearchInput');
+    const searchResults = document.getElementById('globalSearchResults');
+    if (!searchInput || !searchResults) return;
+
+    let debounceTimer = null;
+    let selectedIndex = -1;
+
+    function hideDropdown() {
+      searchResults.classList.add('d-none');
+      searchResults.innerHTML = '';
+      selectedIndex = -1;
+    }
+
+    function showLoading() {
+      searchResults.innerHTML = '<div class="search-loading"><i class="bi bi-arrow-repeat spin me-2"></i>Searching...</div>';
+      searchResults.classList.remove('d-none');
+    }
+
+    function renderResults(results, query) {
+      if (!results || results.length === 0) {
+        searchResults.innerHTML = '<div class="search-no-results"><i class="bi bi-search me-2 text-muted"></i>No results found</div>';
+        searchResults.classList.remove('d-none');
+        selectedIndex = -1;
+        return;
+      }
+
+      let html = '';
+      let currentCategory = '';
+
+      results.forEach((item, index) => {
+        if (item.category !== currentCategory) {
+          currentCategory = item.category;
+          html += `<div class="search-section-header">${escapeHtml(currentCategory)}</div>`;
+        }
+        html += `
+          <a href="${escapeHtml(item.url)}" class="search-result-item" data-index="${index}">
+            <div class="search-result-icon ${item.bg_class || 'bg-light'}">
+              <i class="bi ${escapeHtml(item.icon || 'bi-search')}"></i>
+            </div>
+            <div class="search-result-content">
+              <div class="search-result-title">${escapeHtml(item.title)}</div>
+              <div class="search-result-sub">${escapeHtml(item.sub)}</div>
+            </div>
+            <span class="search-result-badge ${item.badge_class || 'bg-secondary'}">${escapeHtml(item.category)}</span>
+          </a>
+        `;
+      });
+
+      searchResults.innerHTML = html;
+      searchResults.classList.remove('d-none');
+      selectedIndex = -1;
+    }
+
+    function performSearch() {
+      const q = searchInput.value.trim();
+      if (!q) {
+        hideDropdown();
+        return;
+      }
+
+      showLoading();
+      fetch('/api/search?q=' + encodeURIComponent(q))
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.results) {
+            renderResults(data.results, q);
+          } else {
+            renderResults([], q);
+          }
+        })
+        .catch(err => {
+          console.error('Global search failed:', err);
+          searchResults.innerHTML = '<div class="search-no-results text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Search error</div>';
+        });
+    }
+
+    searchInput.addEventListener('input', () => {
+      clearTimeout(debounceTimer);
+      const val = searchInput.value.trim();
+      if (!val) {
+        hideDropdown();
+        return;
+      }
+      debounceTimer = setTimeout(performSearch, 250);
+    });
+
+    searchInput.addEventListener('focus', () => {
+      if (searchInput.value.trim() && searchResults.children.length > 0) {
+        searchResults.classList.remove('d-none');
+      }
+    });
+
+    searchInput.addEventListener('keydown', (e) => {
+      const items = searchResults.querySelectorAll('.search-result-item');
+      if (items.length === 0) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          performSearch();
+        }
+        return;
+      }
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        selectedIndex = (selectedIndex + 1) % items.length;
+        updateSelection(items);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        selectedIndex = (selectedIndex - 1 + items.length) % items.length;
+        updateSelection(items);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (selectedIndex >= 0 && items[selectedIndex]) {
+          items[selectedIndex].click();
+        } else if (items[0]) {
+          items[0].click();
+        }
+      } else if (e.key === 'Escape') {
+        hideDropdown();
+        searchInput.blur();
+      }
+    });
+
+    function updateSelection(items) {
+      items.forEach((item, idx) => {
+        if (idx === selectedIndex) {
+          item.classList.add('selected');
+          item.scrollIntoView({ block: 'nearest' });
+        } else {
+          item.classList.remove('selected');
+        }
+      });
+    }
+
+    if (searchForm) {
+      searchForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const items = searchResults.querySelectorAll('.search-result-item');
+        if (items.length > 0) {
+          const target = selectedIndex >= 0 ? items[selectedIndex] : items[0];
+          target.click();
+        } else {
+          performSearch();
+        }
+      });
+    }
+
+    document.addEventListener('click', (e) => {
+      if (searchForm && !searchForm.contains(e.target)) {
+        hideDropdown();
+      }
+    });
+  });
 })();
 // cache refresh 

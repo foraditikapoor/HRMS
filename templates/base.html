@@ -112,8 +112,9 @@
         <div class="app-main">
             <header class="topbar">
                 <button class="sidebar-toggle" type="button" aria-label="Toggle navigation" aria-controls="appSidebar" aria-expanded="false"><i class="bi bi-list"></i></button>
-                <form class="topbar-search" role="search" onsubmit="return false;">
-                    <i class="bi bi-search"></i><input type="search" placeholder="Search" aria-label="Search">
+                <form class="topbar-search position-relative" id="globalSearchForm" role="search" onsubmit="return false;">
+                    <i class="bi bi-search"></i><input type="search" id="globalSearchInput" placeholder="Search..." aria-label="Search" autocomplete="off">
+                    <div id="globalSearchResults" class="global-search-dropdown shadow-lg d-none"></div>
                 </form>
                 <div class="topbar-actions">
                     <div class="dropdown">

@@ -1970,6 +1970,343 @@ def api_update_sidebar_preference():
     return jsonify({"status": "success", "sidebar_style": sidebar_style})
 
 
+@app.route("/api/search", methods=["GET"])
+@login_required
+def api_global_search():
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify({"status": "success", "query": "", "results": []})
+
+    results = []
+    role = (getattr(current_user, "role", None) or "user").lower()
+    user_id = current_user.id
+    q_like = f"%{q}%"
+
+    try:
+        with get_db() as conn:
+            # 1. EMPLOYEES
+            if role in ("admin", "hr"):
+                emp_rows = conn.execute(
+                    """
+                    SELECT e.id AS emp_id, e.user_id, e.name, e.department, e.contact_number, u.username
+                    FROM employees e
+                    LEFT JOIN users u ON e.user_id = u.id
+                    WHERE e.name LIKE ? OR e.department LIKE ? OR e.contact_number LIKE ? OR u.username LIKE ?
+                    ORDER BY e.name LIMIT 5
+                    """,
+                    (q_like, q_like, q_like, q_like),
+                ).fetchall()
+                for row in emp_rows:
+                    results.append({
+                        "category": "Employee",
+                        "title": row["name"] or row["username"] or "Employee",
+                        "sub": f"Dept: {row['department'] or 'General'} | User: {row['username'] or 'N/A'}",
+                        "icon": "bi-person-badge",
+                        "bg_class": "bg-primary-subtle text-primary",
+                        "badge_class": "bg-primary text-white",
+                        "url": url_for("view_employee", emp_id=row["emp_id"]),
+                    })
+            else:
+                emp_rows = conn.execute(
+                    """
+                    SELECT e.id AS emp_id, e.user_id, e.name, e.department, u.username
+                    FROM employees e
+                    JOIN users u ON e.user_id = u.id
+                    WHERE u.id = ? AND (e.name LIKE ? OR e.department LIKE ? OR u.username LIKE ?)
+                    LIMIT 1
+                    """,
+                    (user_id, q_like, q_like, q_like),
+                ).fetchall()
+                for row in emp_rows:
+                    results.append({
+                        "category": "Employee",
+                        "title": row["name"] or row["username"],
+                        "sub": f"My Profile | Dept: {row['department'] or 'General'}",
+                        "icon": "bi-person-badge",
+                        "bg_class": "bg-primary-subtle text-primary",
+                        "badge_class": "bg-primary text-white",
+                        "url": url_for("settings_profile"),
+                    })
+
+            # 2. TASKS
+            if role == "admin":
+                task_rows = conn.execute(
+                    """
+                    SELECT id, title, task_category, project, assigned_to, priority, status, deadline
+                    FROM tasks
+                    WHERE title LIKE ? OR description LIKE ? OR project LIKE ? OR assigned_to LIKE ?
+                    ORDER BY id DESC LIMIT 5
+                    """,
+                    (q_like, q_like, q_like, q_like),
+                ).fetchall()
+                for r in task_rows:
+                    results.append({
+                        "category": "Task",
+                        "title": r["title"],
+                        "sub": f"Status: {r['status'] or 'Pending'} | Assigned: {r['assigned_to'] or 'N/A'} | Due: {r['deadline'] or '-'}",
+                        "icon": "bi-check2-square",
+                        "bg_class": "bg-success-subtle text-success",
+                        "badge_class": "bg-success text-white",
+                        "url": url_for("task_management", q=q),
+                    })
+            else:
+                user_names = get_user_task_names(conn, current_user)
+                if user_names:
+                    placeholders = ", ".join("?" for _ in user_names)
+                    sql = f"""
+                        SELECT id, title, task_category, project, assigned_to, priority, status, deadline
+                        FROM tasks
+                        WHERE (assigned_to IN ({placeholders}) OR assigned_by IN ({placeholders}))
+                          AND (title LIKE ? OR description LIKE ? OR project LIKE ?)
+                        ORDER BY id DESC LIMIT 5
+                    """
+                    params = list(user_names) + list(user_names) + [q_like, q_like, q_like]
+                    task_rows = conn.execute(sql, params).fetchall()
+                    for r in task_rows:
+                        results.append({
+                            "category": "Task",
+                            "title": r["title"],
+                            "sub": f"Status: {r['status'] or 'Pending'} | Priority: {r['priority'] or 'Normal'} | Due: {r['deadline'] or '-'}",
+                            "icon": "bi-check2-square",
+                            "bg_class": "bg-success-subtle text-success",
+                            "badge_class": "bg-success text-white",
+                            "url": url_for("my_tasks", q=q),
+                        })
+
+            # 3. PROJECTS (Admin Only)
+            if role == "admin":
+                proj_rows = conn.execute(
+                    """
+                    SELECT p.id, p.client_name, p.services, p.assigned_to, c.name AS client_name_from_table
+                    FROM projects p
+                    LEFT JOIN clients c ON p.client_id = c.id
+                    WHERE p.client_name LIKE ? OR p.services LIKE ? OR p.assigned_to LIKE ? OR c.name LIKE ? OR p.delivery_details LIKE ?
+                    ORDER BY p.id DESC LIMIT 5
+                    """,
+                    (q_like, q_like, q_like, q_like, q_like),
+                ).fetchall()
+                for r in proj_rows:
+                    cname = r["client_name_from_table"] or r["client_name"] or "Project"
+                    results.append({
+                        "category": "Project",
+                        "title": f"Project: {cname}",
+                        "sub": f"Services: {r['services'] or 'N/A'} | Team: {r['assigned_to'] or 'N/A'}",
+                        "icon": "bi-kanban",
+                        "bg_class": "bg-warning-subtle text-warning-emphasis",
+                        "badge_class": "bg-warning text-dark",
+                        "url": url_for("admin_projects", search=q),
+                    })
+
+            # 4. CLIENTS (Admin Only)
+            if role == "admin":
+                client_rows = conn.execute(
+                    """
+                    SELECT id, name, services, contact_number, email, city
+                    FROM clients
+                    WHERE name LIKE ? OR services LIKE ? OR email LIKE ? OR contact_number LIKE ? OR city LIKE ?
+                    ORDER BY name LIMIT 5
+                    """,
+                    (q_like, q_like, q_like, q_like, q_like),
+                ).fetchall()
+                for r in client_rows:
+                    results.append({
+                        "category": "Client",
+                        "title": r["name"],
+                        "sub": f"Services: {r['services'] or 'N/A'} | Contact: {r['contact_number'] or r['email'] or 'N/A'}",
+                        "icon": "bi-building",
+                        "bg_class": "bg-info-subtle text-info-emphasis",
+                        "badge_class": "bg-info text-white",
+                        "url": url_for("edit_client", client_id=r["id"]),
+                    })
+
+            # 5. LEAVE REQUESTS
+            if role in ("admin", "hr"):
+                leave_rows = conn.execute(
+                    """
+                    SELECT id, user_id, employee_name, leave_type, start_date, end_date, total_days, reason, status
+                    FROM leave_requests
+                    WHERE employee_name LIKE ? OR leave_type LIKE ? OR reason LIKE ? OR status LIKE ? OR start_date LIKE ? OR end_date LIKE ?
+                    ORDER BY id DESC LIMIT 5
+                    """,
+                    (q_like, q_like, q_like, q_like, q_like, q_like),
+                ).fetchall()
+                for r in leave_rows:
+                    results.append({
+                        "category": "Leave",
+                        "title": f"Leave: {r['employee_name']} ({r['leave_type']})",
+                        "sub": f"Status: {r['status']} | Dates: {r['start_date']} to {r['end_date']} ({r['total_days']}d)",
+                        "icon": "bi-calendar2-range",
+                        "bg_class": "bg-danger-subtle text-danger",
+                        "badge_class": "bg-danger text-white",
+                        "url": url_for("view_all_leave_requests"),
+                    })
+            else:
+                leave_rows = conn.execute(
+                    """
+                    SELECT id, user_id, employee_name, leave_type, start_date, end_date, total_days, reason, status
+                    FROM leave_requests
+                    WHERE user_id = ? AND (leave_type LIKE ? OR reason LIKE ? OR status LIKE ? OR start_date LIKE ? OR end_date LIKE ?)
+                    ORDER BY id DESC LIMIT 5
+                    """,
+                    (user_id, q_like, q_like, q_like, q_like, q_like),
+                ).fetchall()
+                for r in leave_rows:
+                    results.append({
+                        "category": "Leave",
+                        "title": f"My Leave: {r['leave_type']}",
+                        "sub": f"Status: {r['status']} | Dates: {r['start_date']} to {r['end_date']} ({r['total_days']}d)",
+                        "icon": "bi-calendar2-range",
+                        "bg_class": "bg-danger-subtle text-danger",
+                        "badge_class": "bg-danger text-white",
+                        "url": url_for("my_leave_requests"),
+                    })
+
+            # 6. ATTENDANCE
+            if role in ("admin", "hr"):
+                att_rows = conn.execute(
+                    """
+                    SELECT id, user_id, username, date, punch_in_time, punch_out_time, total_hours
+                    FROM attendance
+                    WHERE username LIKE ? OR date LIKE ? OR punch_in_time LIKE ? OR punch_out_time LIKE ?
+                    ORDER BY id DESC LIMIT 5
+                    """,
+                    (q_like, q_like, q_like, q_like),
+                ).fetchall()
+                for r in att_rows:
+                    results.append({
+                        "category": "Attendance",
+                        "title": f"Attendance: {r['username']} ({r['date']})",
+                        "sub": f"In: {r['punch_in_time'] or '-'} | Out: {r['punch_out_time'] or '-'} | Hrs: {r['total_hours'] or '0'}",
+                        "icon": "bi-clock-history",
+                        "bg_class": "bg-secondary-subtle text-secondary-emphasis",
+                        "badge_class": "bg-secondary text-white",
+                        "url": url_for("admin_attendance"),
+                    })
+            else:
+                att_rows = conn.execute(
+                    """
+                    SELECT id, user_id, username, date, punch_in_time, punch_out_time, total_hours
+                    FROM attendance
+                    WHERE user_id = ? AND (date LIKE ? OR punch_in_time LIKE ? OR punch_out_time LIKE ?)
+                    ORDER BY id DESC LIMIT 5
+                    """,
+                    (user_id, q_like, q_like, q_like),
+                ).fetchall()
+                for r in att_rows:
+                    results.append({
+                        "category": "Attendance",
+                        "title": f"My Attendance ({r['date']})",
+                        "sub": f"In: {r['punch_in_time'] or '-'} | Out: {r['punch_out_time'] or '-'} | Hrs: {r['total_hours'] or '0'}",
+                        "icon": "bi-clock-history",
+                        "bg_class": "bg-secondary-subtle text-secondary-emphasis",
+                        "badge_class": "bg-secondary text-white",
+                        "url": url_for("attendance_calendar"),
+                    })
+
+            # 7. PERFORMANCE RECORDS
+            if role in ("admin", "hr"):
+                perf_rows = conn.execute(
+                    """
+                    SELECT id, employee_user_id, employee_name, reviewer_username, review_period, overall_rating, comments
+                    FROM performance_reviews
+                    WHERE employee_name LIKE ? OR reviewer_username LIKE ? OR review_period LIKE ? OR comments LIKE ?
+                    ORDER BY id DESC LIMIT 5
+                    """,
+                    (q_like, q_like, q_like, q_like),
+                ).fetchall()
+                for r in perf_rows:
+                    results.append({
+                        "category": "Performance",
+                        "title": f"Review: {r['employee_name']} ({r['review_period']})",
+                        "sub": f"Rating: {r['overall_rating']}/5.0 | Reviewer: {r['reviewer_username']}",
+                        "icon": "bi-graph-up-arrow",
+                        "bg_class": "bg-primary-subtle text-primary",
+                        "badge_class": "bg-dark text-white",
+                        "url": url_for("employee_performance_profile", user_id=r["employee_user_id"]),
+                    })
+            else:
+                perf_rows = conn.execute(
+                    """
+                    SELECT id, employee_user_id, employee_name, reviewer_username, review_period, overall_rating, comments
+                    FROM performance_reviews
+                    WHERE employee_user_id = ? AND (review_period LIKE ? OR comments LIKE ? OR reviewer_username LIKE ?)
+                    ORDER BY id DESC LIMIT 5
+                    """,
+                    (user_id, q_like, q_like, q_like),
+                ).fetchall()
+                for r in perf_rows:
+                    results.append({
+                        "category": "Performance",
+                        "title": f"My Review ({r['review_period']})",
+                        "sub": f"Rating: {r['overall_rating']}/5.0 | Reviewer: {r['reviewer_username']}",
+                        "icon": "bi-graph-up-arrow",
+                        "bg_class": "bg-primary-subtle text-primary",
+                        "badge_class": "bg-dark text-white",
+                        "url": url_for("employee_performance_profile", user_id=user_id),
+                    })
+
+            # 8. NOTIFICATIONS (User's own notifications)
+            notif_rows = conn.execute(
+                """
+                SELECT id, title, message, link, created_at
+                FROM notifications
+                WHERE user_id = ? AND (title LIKE ? OR message LIKE ?)
+                ORDER BY id DESC LIMIT 5
+                """,
+                (user_id, q_like, q_like),
+            ).fetchall()
+            for r in notif_rows:
+                link_url = r["link"] if (r["link"] and r["link"] != "#") else url_for("user_notifications")
+                results.append({
+                    "category": "Notification",
+                    "title": r["title"],
+                    "sub": f"{r['message']} ({r['created_at']})",
+                    "icon": "bi-bell",
+                    "bg_class": "bg-warning-subtle text-warning-emphasis",
+                    "badge_class": "bg-warning text-dark",
+                    "url": link_url,
+                })
+
+            # 9. SYSTEM SHORTCUTS / REPORTS
+            q_lower = q.lower()
+            if "att" in q_lower or "clock" in q_lower:
+                results.append({
+                    "category": "Report",
+                    "title": "Attendance Reports",
+                    "sub": "View full company attendance analytics and logs",
+                    "icon": "bi-file-earmark-bar-graph",
+                    "bg_class": "bg-info-subtle text-info",
+                    "badge_class": "bg-info text-white",
+                    "url": url_for("reports_attendance"),
+                })
+            if "leave" in q_lower or "vacation" in q_lower:
+                results.append({
+                    "category": "Report",
+                    "title": "Leave Reports",
+                    "sub": "View leave utilization and request summaries",
+                    "icon": "bi-file-earmark-bar-graph",
+                    "bg_class": "bg-info-subtle text-info",
+                    "badge_class": "bg-info text-white",
+                    "url": url_for("reports_leave"),
+                })
+            if "perf" in q_lower or "review" in q_lower:
+                results.append({
+                    "category": "Report",
+                    "title": "Performance Reports",
+                    "sub": "View performance scores and ratings analysis",
+                    "icon": "bi-file-earmark-bar-graph",
+                    "bg_class": "bg-info-subtle text-info",
+                    "badge_class": "bg-info text-white",
+                    "url": url_for("reports_performance"),
+                })
+
+    except Exception as e:  # noqa: BLE001
+        app.logger.error("Error in api_global_search: %s", e)
+        return jsonify({"status": "error", "query": q, "results": [], "message": "Search error"}), 200
+
+    return jsonify({"status": "success", "query": q, "results": results[:25]})
+
+
 @app.route("/")
 def index():
     return render_template_string(
