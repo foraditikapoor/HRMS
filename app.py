@@ -265,7 +265,7 @@ def generate_payslip_pdf(payroll_data):
         ],
         [
             Paragraph("<b>Employee ID:</b>", header_cell_style),
-            Paragraph(f"EMP-{payroll_data.get('emp_id', 0):04d}", body_cell_style),
+            Paragraph(str(payroll_data.get("employee_code") or f"EMP-{payroll_data.get('emp_id', 0):04d}"), body_cell_style),
             Paragraph("<b>Pay Date:</b>", header_cell_style),
             Paragraph(str(pay_date), body_cell_style),
         ],
@@ -1100,12 +1100,37 @@ def ensure_employee_table():
             conn.execute("ALTER TABLE employees ADD COLUMN date_of_joining TEXT")
         if "date_of_birth" not in columns:
             conn.execute("ALTER TABLE employees ADD COLUMN date_of_birth TEXT")
+        if "employee_code" not in columns:
+            conn.execute("ALTER TABLE employees ADD COLUMN employee_code TEXT")
         # Existing employee records have no linked user and remain untouched.
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_user_id "
             "ON employees(user_id) WHERE user_id IS NOT NULL"
         )
         conn.commit()
+
+
+def validate_employee_code(conn, code, current_emp_id=None):
+    """Validates employee code for emptiness and uniqueness."""
+    code = (code or "").strip()
+    if not code:
+        return False, "Employee ID cannot be empty."
+
+    if current_emp_id:
+        existing = conn.execute(
+            "SELECT id FROM employees WHERE LOWER(employee_code) = LOWER(?) AND id != ?",
+            (code, current_emp_id),
+        ).fetchone()
+    else:
+        existing = conn.execute(
+            "SELECT id FROM employees WHERE LOWER(employee_code) = LOWER(?)",
+            (code,),
+        ).fetchone()
+
+    if existing:
+        return False, f"Employee ID '{code}' is already assigned to another employee."
+
+    return True, None
 
 
 def calculate_permanent_date(joining_date_str):
@@ -2047,6 +2072,7 @@ def calculate_employee_payroll(conn, emp_id, year=None, month=None):
 
             return {
                 "emp_id": emp["id"],
+                "employee_code": dict(emp).get("employee_code") or f"EMP-{emp['id']:04d}",
                 "user_id": user_id,
                 "name": emp["name"],
                 "department": emp["department"] or "N/A",
@@ -2148,6 +2174,7 @@ def calculate_employee_payroll(conn, emp_id, year=None, month=None):
 
         return {
             "emp_id": emp["id"],
+            "employee_code": dict(emp).get("employee_code") or f"EMP-{emp['id']:04d}",
             "user_id": user_id,
             "name": emp["name"],
             "department": emp["department"] or "N/A",
@@ -6678,7 +6705,7 @@ def admin_employees():
     with get_db() as conn:
         rows = conn.execute(
             """
-            SELECT e.id, e.name, e.department, e.salary, e.date_of_joining, e.date_of_birth, u.role
+            SELECT e.id, e.name, e.employee_code, e.department, e.salary, e.date_of_joining, e.date_of_birth, u.role
             FROM employees e
             LEFT JOIN users u ON e.user_id = u.id
             ORDER BY e.name
@@ -6718,7 +6745,8 @@ def admin_employees():
                         <table class="table table-hover align-middle mb-0">
                             <thead class="table-light">
                                 <tr>
-                                    <th class="ps-4">Name</th>
+                                    <th class="ps-4">Employee ID</th>
+                                    <th>Name</th>
                                     <th>Role</th>
                                     <th>Department</th>
                                     <th>Joining Date</th>
@@ -6729,7 +6757,8 @@ def admin_employees():
                             <tbody>
                             {% for r in rows %}
                                 <tr>
-                                    <td class="ps-4 fw-bold">{{ r.name }}</td>
+                                    <td class="ps-4"><span class="badge bg-secondary bg-opacity-10 text-dark border">{{ r.employee_code or ('EMP-%04d'|format(r.id)) }}</span></td>
+                                    <td class="fw-bold">{{ r.name }}</td>
                                     <td>
                                         {% if r.role == 'admin' %}
                                             <span class="badge bg-primary">Admin</span>
@@ -6778,6 +6807,7 @@ def add_employee():
         flash("Access denied.", "danger")
         return redirect(url_for("dashboard"))
     if request.method == "POST":
+        employee_code = request.form.get("employee_code", "").strip()
         name = request.form.get("name", "").strip()
         address = request.form.get("address", "").strip()
         education = request.form.get("education", "").strip()
@@ -6796,10 +6826,16 @@ def add_employee():
         date_of_joining = request.form.get("date_of_joining", "").strip() or None
         date_of_birth = request.form.get("date_of_birth", "").strip() or None
         with get_db() as conn:
+            valid, err_msg = validate_employee_code(conn, employee_code)
+            if not valid:
+                flash(err_msg, "danger")
+                return redirect(url_for("add_employee"))
+
             conn.execute(
-                "INSERT INTO employees (name, address, education, experience, contact_number, emergency_contact, department, salary, pan_path, aadhaar_path, other_docs_path, date_of_joining, date_of_birth) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO employees (name, employee_code, address, education, experience, contact_number, emergency_contact, department, salary, pan_path, aadhaar_path, other_docs_path, date_of_joining, date_of_birth) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     name,
+                    employee_code,
                     address,
                     education,
                     experience,
@@ -6834,12 +6870,29 @@ def add_employee():
                 </div>
             </div>
 
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
             <div class="card shadow-sm border-0 mx-auto" style="max-width: 800px;">
                 <div class="card-body p-4">
                     <form method="post" enctype="multipart/form-data">
-                        <div class="mb-3">
-                            <label class="form-label fw-bold">Name <span class="text-danger">*</span></label>
-                            <input class="form-control" name="name" required placeholder="Full Name">
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Employee ID <span class="text-danger">*</span></label>
+                                <input class="form-control" name="employee_code" required placeholder="e.g. EMP001">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Name <span class="text-danger">*</span></label>
+                                <input class="form-control" name="name" required placeholder="Full Name">
+                            </div>
                         </div>
                         <div class="mb-3">
                             <label class="form-label fw-bold">Address</label>
@@ -6991,7 +7044,7 @@ def view_employee(emp_id):
                         </div>
                         <div class="col-md-6">
                             <p class="mb-1 text-muted small">Employee ID</p>
-                            <p class="fw-semibold mb-0"><span class="badge bg-secondary bg-opacity-10 text-dark border">EMP-{{ "%04d"|format(r.id) }}</span></p>
+                            <p class="fw-semibold mb-0"><span class="badge bg-secondary bg-opacity-10 text-dark border">{{ r.employee_code or ('EMP-%04d'|format(r.id)) }}</span></p>
                         </div>
                         <div class="col-md-6"><p class="mb-1 text-muted small">Department</p><p class="fw-semibold mb-0"><span class="badge bg-light text-dark border">{{ r.department or 'N/A' }}</span></p></div>
                         <div class="col-md-6"><p class="mb-1 text-muted small">Date of Joining</p><p class="fw-semibold mb-0">{{ r.date_of_joining or 'N/A' }}</p></div>
@@ -7219,6 +7272,7 @@ def edit_employee(emp_id):
                 flash("Access denied. HR cannot edit Admin accounts.", "danger")
                 return redirect(url_for("admin_employees"))
     if request.method == "POST":
+        employee_code = request.form.get("employee_code", "").strip()
         name = request.form.get("name", "").strip()
         address = request.form.get("address", "").strip()
         education = request.form.get("education", "").strip()
@@ -7243,12 +7297,18 @@ def edit_employee(emp_id):
         if other_file and other_file.filename:
             other_path = save_uploaded_file(other_file)
         with get_db() as conn:
+            valid, err_msg = validate_employee_code(conn, employee_code, current_emp_id=emp_id)
+            if not valid:
+                flash(err_msg, "danger")
+                return redirect(url_for("edit_employee", emp_id=emp_id))
+
             conn.execute(
                 """
-                    UPDATE employees SET name=?, address=?, education=?, experience=?, contact_number=?, emergency_contact=?, department=?, salary=?, pan_path=?, aadhaar_path=?, other_docs_path=?, date_of_joining=?, date_of_birth=? WHERE id=?
+                    UPDATE employees SET name=?, employee_code=?, address=?, education=?, experience=?, contact_number=?, emergency_contact=?, department=?, salary=?, pan_path=?, aadhaar_path=?, other_docs_path=?, date_of_joining=?, date_of_birth=? WHERE id=?
                     """,
                 (
                     name,
+                    employee_code,
                     address,
                     education,
                     experience,
@@ -7292,12 +7352,29 @@ def edit_employee(emp_id):
                 </div>
             </div>
 
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
             <div class="card shadow-sm border-0 mx-auto" style="max-width: 800px;">
                 <div class="card-body p-4">
                     <form method="post" enctype="multipart/form-data">
-                        <div class="mb-3">
-                            <label class="form-label fw-bold">Name <span class="text-danger">*</span></label>
-                            <input class="form-control" name="name" value="{{ r.name }}" required>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Employee ID <span class="text-danger">*</span></label>
+                                <input class="form-control" name="employee_code" value="{{ r.employee_code or ('EMP-%04d'|format(r.id)) }}" required placeholder="e.g. EMP001">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Name <span class="text-danger">*</span></label>
+                                <input class="form-control" name="name" value="{{ r.name }}" required>
+                            </div>
                         </div>
                         <div class="mb-3">
                             <label class="form-label fw-bold">Address</label>
