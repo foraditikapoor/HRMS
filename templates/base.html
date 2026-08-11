@@ -104,7 +104,6 @@
                         </div>
                     </div>
                 </div>
-                {% if is_admin %}<a class="sidebar-link {% if active_endpoint in ['admin_users', 'create_user', 'admin'] %}active{% endif %}" href="{{ url_for('admin_users') }}"><i class="bi bi-person-gear"></i><span>User Accounts</span></a>{% endif %}
             </nav>
             <div class="sidebar-footer"><span class="status-dot"></span><span>System online</span></div>
         </aside>

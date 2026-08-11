@@ -6698,7 +6698,6 @@ def admin_employees():
                 <div class="d-flex gap-2 flex-wrap">
                     <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}"><i class="bi bi-arrow-left me-1"></i>Dashboard</a>
                     <a class="btn btn-primary" href="{{ url_for('add_employee') }}"><i class="bi bi-person-plus me-1"></i>Add Employee</a>
-                    <a class="btn btn-success" href="{{ url_for('create_user') }}"><i class="bi bi-person-lock me-1"></i>Create User Account</a>
                 </div>
             </div>
 
