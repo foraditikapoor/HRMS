@@ -6597,7 +6597,7 @@ def admin_hr():
                 </div>
                 <div class="d-flex gap-2 flex-wrap">
                     <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}"><i class="bi bi-arrow-left me-1"></i>Dashboard</a>
-                    <a class="btn btn-primary" href="{{ url_for('add_employee') }}"><i class="bi bi-person-plus me-1"></i>Add HR / Employee</a>
+                    <a class="btn btn-primary" href="{{ url_for('add_hr') }}"><i class="bi bi-person-plus me-1"></i>Add HR</a>
                 </div>
             </div>
 
@@ -6703,7 +6703,7 @@ def admin_users():
                 </div>
                 <div class="d-flex gap-2 flex-wrap">
                     <a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}"><i class="bi bi-arrow-left me-1"></i>Dashboard</a>
-                    <a class="btn btn-primary" href="{{ url_for('add_employee') }}"><i class="bi bi-person-plus me-1"></i>Add Admin / Employee</a>
+                    <a class="btn btn-primary" href="{{ url_for('add_admin') }}"><i class="bi bi-person-plus me-1"></i>Add Admin</a>
                 </div>
             </div>
 
@@ -6922,30 +6922,9 @@ def add_employee():
     if request.method == "POST":
         employee_code = request.form.get("employee_code", "").strip()
         name = request.form.get("name", "").strip()
-        
-        # Access Role vs Employment Type Separation
-        access_role = request.form.get("access_role", "").strip().lower()
-        if not access_role:
-            raw_role = request.form.get("role", "employee").strip().lower()
-            if raw_role in ("hr", "admin"):
-                access_role = raw_role
-            else:
-                access_role = "employee"
+        employment_type = request.form.get("employment_type", "permanent employee").strip().lower()
 
-        employment_type = request.form.get("employment_type", "").strip().lower()
-        if not employment_type:
-            raw_role = request.form.get("role", "permanent employee").strip().lower()
-            if raw_role in ("temporary employee", "temporary"):
-                employment_type = "temporary employee"
-            else:
-                employment_type = "permanent employee"
-
-        if access_role == "hr":
-            user_role = "hr"
-        elif access_role == "admin":
-            user_role = "admin"
-        else:
-            user_role = "temporary employee" if employment_type in ("temporary employee", "temporary") else "permanent employee"
+        user_role = "temporary employee" if employment_type in ("temporary employee", "temporary") else "permanent employee"
 
         address = request.form.get("address", "").strip()
         education = request.form.get("education", "").strip()
@@ -6969,10 +6948,6 @@ def add_employee():
         username = request.form.get("username", "").strip()
         email = request.form.get("email", "").strip()
         custom_password = request.form.get("password", "").strip()
-
-        if current_user.role == "hr" and user_role == "admin":
-            flash("Access denied. HR users cannot create Admin accounts.", "danger")
-            return redirect(url_for("add_employee"))
 
         with get_db() as conn:
             valid, err_msg = validate_employee_code(conn, employee_code)
@@ -7063,32 +7038,27 @@ def add_employee():
                     url_for("dashboard"),
                 )
                 notify_admins(
-                    "New User Account Created",
-                    f"Account created for {name} (@{username}) with role {user_role}.",
+                    "New Employee Account Created",
+                    f"Employee created for {name} (@{username}) with type {user_role}.",
                     url_for("admin_employees"),
                 )
                 send_welcome_email(email, name, username, temp_password)
-                flash(f"Account created successfully. Temporary password: {temp_password}", "success")
+                flash(f"Employee added successfully. Temporary password: {temp_password}", "success")
             else:
                 flash("Employee added successfully.", "success")
 
-        if user_role == "hr":
-            return redirect(url_for("admin_hr"))
-        elif user_role == "admin":
-            return redirect(url_for("admin_users"))
-        else:
-            return redirect(url_for("admin_employees"))
+        return redirect(url_for("admin_employees"))
 
     return render_template_string(
         """
         {% extends "base.html" %}
-        {% block title %}Add Employee / User{% endblock %}
+        {% block title %}Add Employee{% endblock %}
         {% block page_content %}
         <div class="container-fluid py-4">
             <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
                 <div>
-                    <h1 class="h3 mb-1"><i class="bi bi-person-plus me-2 text-primary"></i>Add Employee / Account</h1>
-                    <p class="text-muted mb-0">Add a new employee profile and optional login credentials to the system.</p>
+                    <h1 class="h3 mb-1"><i class="bi bi-person-plus me-2 text-primary"></i>Add Employee</h1>
+                    <p class="text-muted mb-0">Add a new employee profile to the system.</p>
                 </div>
                 <div>
                     <a class="btn btn-outline-secondary" href="{{ url_for('admin_employees') }}"><i class="bi bi-arrow-left me-1"></i>Back to Employees</a>
@@ -7109,7 +7079,7 @@ def add_employee():
             <div class="card shadow-sm border-0 mx-auto" style="max-width: 800px;">
                 <div class="card-body p-4">
                     <form method="post" enctype="multipart/form-data">
-                        <h5 class="fw-bold mb-3"><i class="bi bi-person-badge me-2 text-primary"></i>Account & Employee Details</h5>
+                        <h5 class="fw-bold mb-3"><i class="bi bi-person-badge me-2 text-primary"></i>Employee Details</h5>
                         <div class="row g-3 mb-3">
                             <div class="col-md-6">
                                 <label class="form-label fw-bold">Employee ID <span class="text-danger">*</span></label>
@@ -7122,21 +7092,15 @@ def add_employee():
                         </div>
                         <div class="row g-3 mb-3">
                             <div class="col-md-6">
-                                <label class="form-label fw-bold">Access Role <span class="text-danger">*</span></label>
-                                <select class="form-select" name="access_role" id="accessRoleSelect" onchange="toggleEmpTypeDisplay(this.value)">
-                                    <option value="employee" selected>Employee</option>
-                                    <option value="hr">HR</option>
-                                    {% if current_user.role == 'admin' %}
-                                        <option value="admin">Admin</option>
-                                    {% endif %}
-                                </select>
-                            </div>
-                            <div class="col-md-6" id="empTypeContainer">
                                 <label class="form-label fw-bold">Employee Type <span class="text-danger">*</span></label>
-                                <select class="form-select" name="employment_type" id="empTypeSelect">
+                                <select class="form-select" name="employment_type">
                                     <option value="permanent employee" selected>Permanent Employee</option>
                                     <option value="temporary employee">Temporary Employee</option>
                                 </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Base Salary (INR)</label>
+                                <input class="form-control" name="salary" type="number" step="0.01" placeholder="e.g. 50000">
                             </div>
                         </div>
                         <div class="row g-3 mb-3">
@@ -7167,12 +7131,6 @@ def add_employee():
                             <div class="col-md-6">
                                 <label class="form-label fw-bold">Experience</label>
                                 <input class="form-control" name="experience" placeholder="Years or summary of experience">
-                            </div>
-                        </div>
-                        <div class="row g-3 mb-3">
-                            <div class="col-md-6">
-                                <label class="form-label fw-bold">Base Salary (INR)</label>
-                                <input class="form-control" name="salary" type="number" step="0.01" placeholder="e.g. 50000">
                             </div>
                         </div>
                         <div class="mb-3">
@@ -7207,10 +7165,10 @@ def add_employee():
                         <div class="bg-light p-3 rounded border mb-4">
                             <div class="form-check form-switch mb-3">
                                 <input class="form-check-input" type="checkbox" name="create_account" value="1" id="createAccountSwitch" onchange="document.getElementById('userAccountFields').style.display = this.checked ? 'block' : 'none';">
-                                <label class="form-check-label fw-bold text-primary" for="createAccountSwitch"><i class="bi bi-person-lock me-1"></i>Create User Login Account for this Profile</label>
+                                <label class="form-check-label fw-bold text-primary" for="createAccountSwitch"><i class="bi bi-person-lock me-1"></i>Create User Login Account for this Employee</label>
                             </div>
                             <div id="userAccountFields" style="display: none;">
-                                <p class="small text-muted mb-3">System login credentials will allow access to the dashboard based on the assigned Access Role.</p>
+                                <p class="small text-muted mb-3">System login credentials will allow this employee to access their dashboard and leave requests.</p>
                                 <div class="row g-3">
                                     <div class="col-md-6">
                                         <label class="form-label fw-semibold">Username</label>
@@ -7230,26 +7188,262 @@ def add_employee():
 
                         <div class="d-flex justify-content-end gap-2">
                             <a class="btn btn-outline-secondary" href="{{ url_for('admin_employees') }}">Cancel</a>
-                            <button class="btn btn-primary" type="submit"><i class="bi bi-plus-lg me-1"></i>Submit Profile</button>
+                            <button class="btn btn-primary" type="submit"><i class="bi bi-plus-lg me-1"></i>Add Employee</button>
                         </div>
                     </form>
                 </div>
             </div>
         </div>
+        {% endblock %}
+        """,
+    )
 
-        <script>
-        function toggleEmpTypeDisplay(val) {
-            const container = document.getElementById('empTypeContainer');
-            const select = document.getElementById('empTypeSelect');
-            if (val === 'employee') {
-                container.style.display = 'block';
-                select.disabled = false;
-            } else {
-                container.style.display = 'none';
-                select.disabled = true;
-            }
-        }
-        </script>
+
+@app.route("/admin/hr/add", methods=["GET", "POST"])
+@login_required
+def add_hr():
+    if current_user.role not in ("admin", "hr"):
+        flash("Access denied.", "danger")
+        return redirect(url_for("dashboard"))
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        username = request.form.get("username", "").strip()
+        email = request.form.get("email", "").strip()
+        custom_password = request.form.get("password", "").strip()
+        employee_code = request.form.get("employee_code", "").strip()
+
+        if not name or not username or not email:
+            flash("Name, Username, and Email are required.", "danger")
+            return redirect(url_for("add_hr"))
+
+        with get_db() as conn:
+            existing_user = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+            if existing_user:
+                flash("Username already exists. Please choose a different username.", "danger")
+                return redirect(url_for("add_hr"))
+
+            if employee_code:
+                valid, err_msg = validate_employee_code(conn, employee_code)
+                if not valid:
+                    flash(err_msg, "danger")
+                    return redirect(url_for("add_hr"))
+            else:
+                employee_code = f"HR-{secrets.token_hex(2).upper()}"
+
+            temp_password = custom_password if custom_password else secrets.token_urlsafe(12)
+            cursor = conn.execute(
+                "INSERT INTO users (username, password_hash, role, full_name, email, force_password_change) VALUES (?, ?, 'hr', ?, ?, ?)",
+                (
+                    username,
+                    generate_password_hash(temp_password),
+                    name,
+                    email,
+                    1 if not custom_password else 0,
+                ),
+            )
+            new_user_id = cursor.lastrowid
+
+            conn.execute(
+                "INSERT INTO employees (user_id, name, employee_code) VALUES (?, ?, ?)",
+                (new_user_id, name, employee_code),
+            )
+            conn.commit()
+            sync_all_employee_roles(conn)
+
+            create_notification(new_user_id, "Welcome to HRMS", f"Hello {name}, your HR account (@{username}) has been created.", url_for("dashboard"))
+            notify_admins("New HR Account Created", f"HR Account created for {name} (@{username}).", url_for("admin_hr"))
+            send_welcome_email(email, name, username, temp_password)
+            flash(f"HR account created successfully. Temporary password: {temp_password}", "success")
+
+        return redirect(url_for("admin_hr"))
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Add HR Account{% endblock %}
+        {% block page_content %}
+        <div class="container-fluid py-4">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+                <div>
+                    <h1 class="h3 mb-1"><i class="bi bi-person-badge me-2 text-primary"></i>Add HR</h1>
+                    <p class="text-muted mb-0">Create a new HR staff account with HR dashboard privileges.</p>
+                </div>
+                <div>
+                    <a class="btn btn-outline-secondary" href="{{ url_for('admin_hr') }}"><i class="bi bi-arrow-left me-1"></i>Back to HR</a>
+                </div>
+            </div>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            <div class="card shadow-sm border-0 mx-auto" style="max-width: 650px;">
+                <div class="card-body p-4">
+                    <form method="post">
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Full Name <span class="text-danger">*</span></label>
+                            <input class="form-control" name="name" required placeholder="e.g. Jane Doe">
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Username <span class="text-danger">*</span></label>
+                                <input class="form-control" name="username" required placeholder="e.g. janedoe">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Email Address <span class="text-danger">*</span></label>
+                                <input class="form-control" name="email" type="email" required placeholder="e.g. jane@example.com">
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Password</label>
+                                <input class="form-control" name="password" type="password" placeholder="Leave blank for temp password">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Employee ID (Optional)</label>
+                                <input class="form-control" name="employee_code" placeholder="e.g. HR001">
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-end gap-2 mt-4">
+                            <a class="btn btn-outline-secondary" href="{{ url_for('admin_hr') }}">Cancel</a>
+                            <button class="btn btn-primary" type="submit"><i class="bi bi-check-circle me-1"></i>Add HR</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endblock %}
+        """,
+    )
+
+
+@app.route("/admin/admins/add", methods=["GET", "POST"])
+@login_required
+def add_admin():
+    if current_user.role != "admin":
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        username = request.form.get("username", "").strip()
+        email = request.form.get("email", "").strip()
+        custom_password = request.form.get("password", "").strip()
+        employee_code = request.form.get("employee_code", "").strip()
+
+        if not name or not username or not email:
+            flash("Name, Username, and Email are required.", "danger")
+            return redirect(url_for("add_admin"))
+
+        with get_db() as conn:
+            existing_user = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+            if existing_user:
+                flash("Username already exists. Please choose a different username.", "danger")
+                return redirect(url_for("add_admin"))
+
+            if employee_code:
+                valid, err_msg = validate_employee_code(conn, employee_code)
+                if not valid:
+                    flash(err_msg, "danger")
+                    return redirect(url_for("add_admin"))
+            else:
+                employee_code = f"ADM-{secrets.token_hex(2).upper()}"
+
+            temp_password = custom_password if custom_password else secrets.token_urlsafe(12)
+            cursor = conn.execute(
+                "INSERT INTO users (username, password_hash, role, full_name, email, force_password_change) VALUES (?, ?, 'admin', ?, ?, ?)",
+                (
+                    username,
+                    generate_password_hash(temp_password),
+                    name,
+                    email,
+                    1 if not custom_password else 0,
+                ),
+            )
+            new_user_id = cursor.lastrowid
+
+            conn.execute(
+                "INSERT INTO employees (user_id, name, employee_code) VALUES (?, ?, ?)",
+                (new_user_id, name, employee_code),
+            )
+            conn.commit()
+            sync_all_employee_roles(conn)
+
+            create_notification(new_user_id, "Welcome to HRMS", f"Hello {name}, your Admin account (@{username}) has been created.", url_for("dashboard"))
+            notify_admins("New Admin Account Created", f"Admin Account created for {name} (@{username}).", url_for("admin_users"))
+            send_welcome_email(email, name, username, temp_password)
+            flash(f"Admin account created successfully. Temporary password: {temp_password}", "success")
+
+        return redirect(url_for("admin_users"))
+
+    return render_template_string(
+        """
+        {% extends "base.html" %}
+        {% block title %}Add Admin Account{% endblock %}
+        {% block page_content %}
+        <div class="container-fluid py-4">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+                <div>
+                    <h1 class="h3 mb-1"><i class="bi bi-shield-check me-2 text-primary"></i>Add Admin</h1>
+                    <p class="text-muted mb-0">Create a new system administrator account with root privileges.</p>
+                </div>
+                <div>
+                    <a class="btn btn-outline-secondary" href="{{ url_for('admin_users') }}"><i class="bi bi-arrow-left me-1"></i>Back to Admin</a>
+                </div>
+            </div>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            <div class="card shadow-sm border-0 mx-auto" style="max-width: 650px;">
+                <div class="card-body p-4">
+                    <form method="post">
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Full Name <span class="text-danger">*</span></label>
+                            <input class="form-control" name="name" required placeholder="e.g. John Administrator">
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Username <span class="text-danger">*</span></label>
+                                <input class="form-control" name="username" required placeholder="e.g. adminjohn">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Email Address <span class="text-danger">*</span></label>
+                                <input class="form-control" name="email" type="email" required placeholder="e.g. admin@example.com">
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Password</label>
+                                <input class="form-control" name="password" type="password" placeholder="Leave blank for temp password">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Employee ID (Optional)</label>
+                                <input class="form-control" name="employee_code" placeholder="e.g. ADM001">
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-end gap-2 mt-4">
+                            <a class="btn btn-outline-secondary" href="{{ url_for('admin_users') }}">Cancel</a>
+                            <button class="btn btn-primary" type="submit"><i class="bi bi-shield-check me-1"></i>Add Admin</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
         {% endblock %}
         """,
     )
