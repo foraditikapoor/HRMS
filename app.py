@@ -36,8 +36,324 @@ import smtplib
 import sqlite3
 import time
 import traceback
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+
+def send_email_with_attachment(to_email, subject, html_content, attachment_bytes, filename, text_content=None):
+    """Send an HTML email with a file attachment using Gmail SMTP configuration."""
+    if not to_email:
+        print("DEBUG SMTP: No recipient email provided.")
+        return False, "No recipient email address provided."
+    if not MAIL_USERNAME or not MAIL_PASSWORD:
+        print("DEBUG SMTP: MAIL_USERNAME or MAIL_PASSWORD not configured.")
+        return False, "SMTP email server configuration missing."
+
+    try:
+        msg = MIMEMultipart("mixed")
+        msg["Subject"] = subject
+        msg["From"] = MAIL_DEFAULT_SENDER or EMAIL_ADDRESS or MAIL_USERNAME
+        msg["To"] = to_email
+
+        if text_content:
+            msg.attach(MIMEText(text_content, "plain"))
+        else:
+            import re
+            plain_text = re.sub(r'<[^>]+>', '', html_content)
+            msg.attach(MIMEText(plain_text, "plain"))
+
+        msg.attach(MIMEText(html_content, "html"))
+
+        if attachment_bytes and filename:
+            part = MIMEApplication(attachment_bytes, Name=filename)
+            part['Content-Disposition'] = f'attachment; filename="{filename}"'
+            msg.attach(part)
+
+        print(f"DEBUG SMTP: Sending email with attachment to {to_email} via {MAIL_SERVER}:{MAIL_PORT}")
+        with smtplib.SMTP(MAIL_SERVER, MAIL_PORT, timeout=10) as server:
+            if MAIL_USE_TLS:
+                server.starttls()
+            server.login(MAIL_USERNAME, MAIL_PASSWORD)
+            server.send_message(msg)
+        print(f"DEBUG SMTP: Email with attachment successfully sent to {to_email}")
+        return True, "Email sent successfully."
+    except Exception as e:  # noqa: BLE001
+        print(f"ERROR SMTP: Failed to send email to {to_email}: {e}")
+        traceback.print_exc()
+        return False, str(e)
+
+
+def amount_to_words(amount):
+    """Convert numeric amount to words (Indian numbering system)."""
+    try:
+        num = int(round(amount))
+        if num == 0:
+            return "Zero Rupees Only"
+
+        units = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+                 "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"]
+        tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"]
+
+        def convert_below_thousand(n):
+            if n == 0:
+                return ""
+            elif n < 20:
+                return units[n]
+            elif n < 100:
+                return tens[n // 10] + (" " + units[n % 10] if n % 10 != 0 else "")
+            else:
+                return units[n // 100] + " Hundred" + (" and " + convert_below_thousand(n % 100) if n % 100 != 0 else "")
+
+        parts = []
+        if num >= 10000000:
+            crore = num // 10000000
+            num %= 10000000
+            parts.append(convert_below_thousand(crore) + " Crore")
+        if num >= 100000:
+            lakh = num // 100000
+            num %= 100000
+            parts.append(convert_below_thousand(lakh) + " Lakh")
+        if num >= 1000:
+            thousand = num // 1000
+            num %= 1000
+            parts.append(convert_below_thousand(thousand) + " Thousand")
+        if num > 0:
+            parts.append(convert_below_thousand(num))
+
+        return " ".join(parts) + " Rupees Only"
+    except Exception:
+        return f"{amount:,.2f} Rupees Only"
+
+
+def generate_payslip_pdf(payroll_data):
+    """Generate professional PDF payslip using ReportLab from existing payroll dict."""
+    import io
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        rightMargin=36,
+        leftMargin=36,
+        topMargin=36,
+        bottomMargin=36
+    )
+
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        'CompanyTitle',
+        parent=styles['Heading1'],
+        fontSize=20,
+        leading=24,
+        textColor=colors.HexColor('#1e293b'),
+        fontName='Helvetica-Bold'
+    )
+    subtitle_style = ParagraphStyle(
+        'CompanySubtitle',
+        parent=styles['Normal'],
+        fontSize=10,
+        leading=14,
+        textColor=colors.HexColor('#64748b'),
+        fontName='Helvetica'
+    )
+    badge_style = ParagraphStyle(
+        'PayslipBadge',
+        parent=styles['Normal'],
+        fontSize=14,
+        leading=18,
+        textColor=colors.HexColor('#4f46e5'),
+        fontName='Helvetica-Bold',
+        alignment=2
+    )
+    header_cell_style = ParagraphStyle(
+        'HeaderCell',
+        parent=styles['Normal'],
+        fontSize=9,
+        leading=11,
+        textColor=colors.HexColor('#475569'),
+        fontName='Helvetica-Bold'
+    )
+    body_cell_style = ParagraphStyle(
+        'BodyCell',
+        parent=styles['Normal'],
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor('#1e293b'),
+        fontName='Helvetica'
+    )
+    bold_cell_style = ParagraphStyle(
+        'BoldCell',
+        parent=styles['Normal'],
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor('#0f172a'),
+        fontName='Helvetica-Bold'
+    )
+    net_cell_style = ParagraphStyle(
+        'NetCell',
+        parent=styles['Normal'],
+        fontSize=13,
+        leading=16,
+        textColor=colors.HexColor('#15803d'),
+        fontName='Helvetica-Bold'
+    )
+
+    elements = []
+
+    # Header Table
+    p_month = payroll_data.get('payroll_month', '')
+    p_status = payroll_data.get('payroll_status', 'Finalized')
+    header_data = [
+        [
+            Paragraph("<b>BIZZNEX HRMS</b>", title_style),
+            Paragraph(f"<b>PAYSLIP</b><br/><font size=10 color='#64748b'>{p_month}</font>", badge_style)
+        ],
+        [
+            Paragraph("Enterprise Human Resource Management System", subtitle_style),
+            Paragraph(f"<font size=9 color='#64748b'>Status: <b>{p_status}</b></font>", ParagraphStyle('StatusR', parent=styles['Normal'], alignment=2))
+        ]
+    ]
+    t_header = Table(header_data, colWidths=[340, 200])
+    t_header.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+    ]))
+    elements.append(t_header)
+    elements.append(Spacer(1, 10))
+    elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#cbd5e1'), spaceBefore=2, spaceAfter=12))
+
+    # Employee Summary Section
+    emp_summary_data = [
+        [
+            Paragraph("<b>Employee Name:</b>", header_cell_style),
+            Paragraph(str(payroll_data.get("name", "N/A")), body_cell_style),
+            Paragraph("<b>Pay Period:</b>", header_cell_style),
+            Paragraph(str(p_month), body_cell_style),
+        ],
+        [
+            Paragraph("<b>Employee ID:</b>", header_cell_style),
+            Paragraph(f"EMP-{payroll_data.get('emp_id', 0):04d}", body_cell_style),
+            Paragraph("<b>Working Days:</b>", header_cell_style),
+            Paragraph(f"{payroll_data.get('working_days', 0)} Days", body_cell_style),
+        ],
+        [
+            Paragraph("<b>Department:</b>", header_cell_style),
+            Paragraph(str(payroll_data.get("department", "N/A")), body_cell_style),
+            Paragraph("<b>Present Days:</b>", header_cell_style),
+            Paragraph(f"{payroll_data.get('present_days', 0)} Days", body_cell_style),
+        ],
+        [
+            Paragraph("<b>Per Day Salary:</b>", header_cell_style),
+            Paragraph(f"INR {payroll_data.get('per_day_salary', 0.0):,.2f}", body_cell_style),
+            Paragraph("<b>LOP / Unpaid Days:</b>", header_cell_style),
+            Paragraph(f"{payroll_data.get('unpaid_leave_days', 0.0)} Days", body_cell_style),
+        ]
+    ]
+    t_emp = Table(emp_summary_data, colWidths=[110, 160, 110, 160])
+    t_emp.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#f8fafc')),
+        ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#e2e8f0')),
+        ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#f1f5f9')),
+        ('TOPPADDING', (0,0), (-1,-1), 6),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+        ('LEFTPADDING', (0,0), (-1,-1), 8),
+        ('RIGHTPADDING', (0,0), (-1,-1), 8),
+    ]))
+    elements.append(t_emp)
+    elements.append(Spacer(1, 16))
+
+    # Salary Components Section
+    base_sal = float(payroll_data.get("base_salary", 0.0))
+    lop_ded = float(payroll_data.get("leave_deduction", 0.0))
+    adj = float(payroll_data.get("adjustments", 0.0))
+    final_sal = float(payroll_data.get("final_salary", 0.0))
+
+    components_data = [
+        [
+            Paragraph("<b>EARNINGS</b>", ParagraphStyle('EHead', parent=header_cell_style, textColor=colors.HexColor('#1e40af'))),
+            Paragraph("<b>AMOUNT (INR)</b>", ParagraphStyle('AHead', parent=header_cell_style, alignment=2, textColor=colors.HexColor('#1e40af'))),
+            Paragraph("<b>DEDUCTIONS</b>", ParagraphStyle('DHead', parent=header_cell_style, textColor=colors.HexColor('#991b1b'))),
+            Paragraph("<b>AMOUNT (INR)</b>", ParagraphStyle('ADHead', parent=header_cell_style, alignment=2, textColor=colors.HexColor('#991b1b'))),
+        ],
+        [
+            Paragraph("Basic Salary", body_cell_style),
+            Paragraph(f"{base_sal:,.2f}", ParagraphStyle('R1', parent=body_cell_style, alignment=2)),
+            Paragraph("Loss of Pay (LOP) Deduction", body_cell_style),
+            Paragraph(f"{lop_ded:,.2f}", ParagraphStyle('R2', parent=body_cell_style, alignment=2)),
+        ],
+        [
+            Paragraph("Allowances / Bonus", body_cell_style),
+            Paragraph("0.00", ParagraphStyle('R3', parent=body_cell_style, alignment=2)),
+            Paragraph("Adjustments", body_cell_style),
+            Paragraph(f"{adj:,.2f}", ParagraphStyle('R4', parent=body_cell_style, alignment=2)),
+        ],
+        [
+            Paragraph("<b>Gross Earnings</b>", bold_cell_style),
+            Paragraph(f"<b>{base_sal:,.2f}</b>", ParagraphStyle('R5', parent=bold_cell_style, alignment=2)),
+            Paragraph("<b>Total Deductions</b>", bold_cell_style),
+            Paragraph(f"<b>{lop_ded:,.2f}</b>", ParagraphStyle('R6', parent=bold_cell_style, alignment=2)),
+        ]
+    ]
+
+    t_comp = Table(components_data, colWidths=[170, 100, 170, 100])
+    t_comp.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (1,0), colors.HexColor('#eff6ff')),
+        ('BACKGROUND', (2,0), (3,0), colors.HexColor('#fef2f2')),
+        ('LINEBELOW', (0,0), (-1,0), 1, colors.HexColor('#cbd5e1')),
+        ('LINEBELOW', (0,-1), (-1,-1), 1, colors.HexColor('#cbd5e1')),
+        ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor('#f8fafc')),
+        ('TOPPADDING', (0,0), (-1,-1), 6),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+        ('LEFTPADDING', (0,0), (-1,-1), 8),
+        ('RIGHTPADDING', (0,0), (-1,-1), 8),
+        ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#e2e8f0')),
+        ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#f1f5f9')),
+    ]))
+    elements.append(t_comp)
+    elements.append(Spacer(1, 16))
+
+    # Net Payable Banner
+    words_str = amount_to_words(final_sal)
+    net_data = [
+        [
+            Paragraph("<b>TOTAL NET PAYABLE</b>", ParagraphStyle('NetL', parent=bold_cell_style, fontSize=11)),
+            Paragraph(f"<b>INR {final_sal:,.2f}</b>", net_cell_style)
+        ],
+        [
+            Paragraph(f"<b>Amount in Words:</b> {words_str}", ParagraphStyle('Words', parent=body_cell_style, fontSize=9, textColor=colors.HexColor('#475569'))),
+            Paragraph("", body_cell_style)
+        ]
+    ]
+    t_net = Table(net_data, colWidths=[370, 170])
+    t_net.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#f0fdf4')),
+        ('BOX', (0,0), (-1,-1), 1.5, colors.HexColor('#22c55e')),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('TOPPADDING', (0,0), (-1,-1), 8),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+        ('LEFTPADDING', (0,0), (-1,-1), 10),
+        ('RIGHTPADDING', (0,0), (-1,-1), 10),
+    ]))
+    elements.append(t_net)
+    elements.append(Spacer(1, 24))
+
+    # Footer note
+    footer_text = Paragraph(
+        "<i>Note: This is an official computer-generated payslip from Bizznex HRMS. No physical signature is required.</i>",
+        ParagraphStyle('Foot', parent=styles['Normal'], fontSize=8, textColor=colors.HexColor('#94a3b8'), alignment=1)
+    )
+    elements.append(footer_text)
+
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer.getvalue()
+
 
 def send_email(to_email, subject, html_content, text_content=None):
     """Send an HTML email using SMTP configuration.
@@ -348,6 +664,7 @@ from flask import (
     redirect,
     render_template_string,
     request,
+    send_file,
     url_for,
 )
 from flask_login import (
@@ -13143,6 +13460,15 @@ def settings_payroll():
                                             <i class="bi bi-calculator me-1"></i>Breakdown
                                         </button>
                                         {% if current_user.role in ['admin', 'hr'] %}
+                                            <a href="{{ url_for('download_payslip', emp_id=item.emp_id, month=selected_month_str) }}" target="_blank" class="btn btn-sm btn-outline-primary me-1" title="Generate & Download PDF Payslip">
+                                                <i class="bi bi-file-earmark-pdf me-1"></i>Payslip
+                                            </a>
+                                            <form method="POST" action="{{ url_for('email_payslip', emp_id=item.emp_id) }}" class="d-inline">
+                                                <input type="hidden" name="month" value="{{ selected_month_str }}">
+                                                <button type="submit" class="btn btn-sm btn-outline-success me-1" title="Email PDF Payslip to Employee" onclick="return confirm('Send PDF payslip to {{ item.name }} via email?');">
+                                                    <i class="bi bi-envelope me-1"></i>Email
+                                                </button>
+                                            </form>
                                             {% if item.payroll_status != 'Paid' %}
                                                 <form method="POST" action="{{ url_for('settings_payroll') }}" class="d-inline">
                                                     <input type="hidden" name="action" value="mark_paid">
@@ -13332,6 +13658,127 @@ def settings_payroll():
         selected_year_filter=selected_year_filter,
         available_payroll_years=available_payroll_years,
     )
+
+
+@app.route("/admin/payroll/<int:emp_id>/payslip")
+@login_required
+def download_payslip(emp_id):
+    if current_user.role not in ("admin", "hr"):
+        flash("Access denied. Admin or HR privileges required to generate payslips.", "danger")
+        return redirect(url_for("dashboard"))
+
+    month_arg = request.args.get("month", "").strip()
+    now = datetime.datetime.now(tz=IST)
+    if month_arg and "-" in month_arg:
+        try:
+            y, m = [int(x) for x in month_arg.split("-", 1)]
+        except ValueError:
+            y, m = now.year, now.month
+    else:
+        y, m = now.year, now.month
+
+    month_year_str = f"{y:04d}-{m:02d}"
+
+    with get_db() as conn:
+        emp = conn.execute("SELECT * FROM employees WHERE id = ?", (emp_id,)).fetchone()
+        if not emp:
+            flash("Employee record not found.", "danger")
+            return redirect(url_for("settings_payroll"))
+
+        payroll_data = calculate_employee_payroll(conn, emp_id, y, m)
+        if not payroll_data:
+            flash("Unable to calculate payroll data for employee.", "danger")
+            return redirect(url_for("settings_payroll"))
+
+    try:
+        pdf_bytes = generate_payslip_pdf(payroll_data)
+        filename = f"Payslip_{emp_id}_{month_year_str}.pdf"
+        return send_file(
+            io.BytesIO(pdf_bytes),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=filename
+        )
+    except Exception as e:  # noqa: BLE001
+        print(f"ERROR generating PDF payslip: {e}")
+        traceback.print_exc()
+        flash(f"Failed to generate payslip PDF: {str(e)}", "danger")
+        return redirect(url_for("settings_payroll"))
+
+
+@app.route("/admin/payroll/<int:emp_id>/email-payslip", methods=["POST"])
+@login_required
+def email_payslip(emp_id):
+    if current_user.role not in ("admin", "hr"):
+        flash("Access denied. Admin or HR privileges required to email payslips.", "danger")
+        return redirect(url_for("dashboard"))
+
+    month_arg = request.form.get("month", "").strip() or request.args.get("month", "").strip()
+    now = datetime.datetime.now(tz=IST)
+    if month_arg and "-" in month_arg:
+        try:
+            y, m = [int(x) for x in month_arg.split("-", 1)]
+        except ValueError:
+            y, m = now.year, now.month
+    else:
+        y, m = now.year, now.month
+
+    month_year_str = f"{y:04d}-{m:02d}"
+
+    with get_db() as conn:
+        emp = conn.execute("SELECT * FROM employees WHERE id = ?", (emp_id,)).fetchone()
+        if not emp:
+            flash("Employee record not found.", "danger")
+            return redirect(url_for("settings_payroll"))
+
+        user_id = emp["user_id"]
+        to_email = None
+        if user_id:
+            u = conn.execute("SELECT email FROM users WHERE id = ?", (user_id,)).fetchone()
+            if u and u["email"]:
+                to_email = u["email"].strip()
+
+        if not to_email:
+            flash(f"Employee email address is not available for {emp['name']}.", "warning")
+            return redirect(url_for("settings_payroll", month=month_year_str))
+
+        payroll_data = calculate_employee_payroll(conn, emp_id, y, m)
+        if not payroll_data:
+            flash("Unable to calculate payroll data for employee.", "danger")
+            return redirect(url_for("settings_payroll", month=month_year_str))
+
+    try:
+        pdf_bytes = generate_payslip_pdf(payroll_data)
+        filename = f"Payslip_{emp_id}_{month_year_str}.pdf"
+
+        subject = f"Payslip - {payroll_data['payroll_month']}"
+        html_content = f"""
+        <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+            <h2 style="color: #4f46e5;">BIZZNEX HRMS Payslip</h2>
+            <p>Dear <strong>{payroll_data['name']}</strong>,</p>
+            <p>Please find attached your official salary payslip for <strong>{payroll_data['payroll_month']}</strong>.</p>
+            <table style="width: 100%; max-width: 500px; border-collapse: collapse; margin: 20px 0;">
+                <tr style="background-color: #f8fafc;"><td style="padding: 8px; border: 1px solid #cbd5e1;">Employee Name</td><td style="padding: 8px; border: 1px solid #cbd5e1;"><strong>{payroll_data['name']}</strong></td></tr>
+                <tr><td style="padding: 8px; border: 1px solid #cbd5e1;">Pay Period</td><td style="padding: 8px; border: 1px solid #cbd5e1;">{payroll_data['payroll_month']}</td></tr>
+                <tr style="background-color: #f8fafc;"><td style="padding: 8px; border: 1px solid #cbd5e1;">Net Payable</td><td style="padding: 8px; border: 1px solid #cbd5e1; color: #15803d;"><strong>INR {payroll_data['final_salary']:,.2f}</strong></td></tr>
+            </table>
+            <p>If you have any questions regarding your salary computation, please contact HR/Payroll department.</p>
+            <br>
+            <p>Best regards,<br><strong>Bizznex HR Operations</strong></p>
+        </div>
+        """
+
+        success, msg = send_email_with_attachment(to_email, subject, html_content, pdf_bytes, filename)
+        if success:
+            flash(f"Payslip for {payroll_data['name']} ({payroll_data['payroll_month']}) successfully emailed to {to_email}.", "success")
+        else:
+            flash(f"Could not send email to {to_email}: {msg}. You can still download the PDF payslip directly.", "warning")
+    except Exception as e:  # noqa: BLE001
+        print(f"ERROR emailing payslip: {e}")
+        traceback.print_exc()
+        flash(f"An error occurred while preparing payslip email: {str(e)}. You can still download the PDF directly.", "warning")
+
+    return redirect(url_for("settings_payroll", month=month_year_str))
 
 
 @app.route("/settings/notifications", methods=["GET", "POST"])
