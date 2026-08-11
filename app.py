@@ -6922,7 +6922,31 @@ def add_employee():
     if request.method == "POST":
         employee_code = request.form.get("employee_code", "").strip()
         name = request.form.get("name", "").strip()
-        role = request.form.get("role", "permanent employee").strip()
+        
+        # Access Role vs Employment Type Separation
+        access_role = request.form.get("access_role", "").strip().lower()
+        if not access_role:
+            raw_role = request.form.get("role", "employee").strip().lower()
+            if raw_role in ("hr", "admin"):
+                access_role = raw_role
+            else:
+                access_role = "employee"
+
+        employment_type = request.form.get("employment_type", "").strip().lower()
+        if not employment_type:
+            raw_role = request.form.get("role", "permanent employee").strip().lower()
+            if raw_role in ("temporary employee", "temporary"):
+                employment_type = "temporary employee"
+            else:
+                employment_type = "permanent employee"
+
+        if access_role == "hr":
+            user_role = "hr"
+        elif access_role == "admin":
+            user_role = "admin"
+        else:
+            user_role = "temporary employee" if employment_type in ("temporary employee", "temporary") else "permanent employee"
+
         address = request.form.get("address", "").strip()
         education = request.form.get("education", "").strip()
         experience = request.form.get("experience", "").strip()
@@ -6946,7 +6970,7 @@ def add_employee():
         email = request.form.get("email", "").strip()
         custom_password = request.form.get("password", "").strip()
 
-        if current_user.role == "hr" and role == "admin":
+        if current_user.role == "hr" and user_role == "admin":
             flash("Access denied. HR users cannot create Admin accounts.", "danger")
             return redirect(url_for("add_employee"))
 
@@ -6978,7 +7002,7 @@ def add_employee():
                     (
                         username,
                         generate_password_hash(temp_password),
-                        role,
+                        user_role,
                         name,
                         email,
                         1 if not custom_password else 0,
@@ -7040,17 +7064,17 @@ def add_employee():
                 )
                 notify_admins(
                     "New User Account Created",
-                    f"Account created for {name} (@{username}) with role {role}.",
+                    f"Account created for {name} (@{username}) with role {user_role}.",
                     url_for("admin_employees"),
                 )
                 send_welcome_email(email, name, username, temp_password)
-                flash(f"Employee and login account created successfully. Temporary password: {temp_password}", "success")
+                flash(f"Account created successfully. Temporary password: {temp_password}", "success")
             else:
                 flash("Employee added successfully.", "success")
 
-        if role == "hr":
+        if user_role == "hr":
             return redirect(url_for("admin_hr"))
-        elif role == "admin":
+        elif user_role == "admin":
             return redirect(url_for("admin_users"))
         else:
             return redirect(url_for("admin_employees"))
@@ -7058,12 +7082,12 @@ def add_employee():
     return render_template_string(
         """
         {% extends "base.html" %}
-        {% block title %}Add Employee{% endblock %}
+        {% block title %}Add Employee / User{% endblock %}
         {% block page_content %}
         <div class="container-fluid py-4">
             <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
                 <div>
-                    <h1 class="h3 mb-1"><i class="bi bi-person-plus me-2 text-primary"></i>Add Employee</h1>
+                    <h1 class="h3 mb-1"><i class="bi bi-person-plus me-2 text-primary"></i>Add Employee / Account</h1>
                     <p class="text-muted mb-0">Add a new employee profile and optional login credentials to the system.</p>
                 </div>
                 <div>
@@ -7085,7 +7109,7 @@ def add_employee():
             <div class="card shadow-sm border-0 mx-auto" style="max-width: 800px;">
                 <div class="card-body p-4">
                     <form method="post" enctype="multipart/form-data">
-                        <h5 class="fw-bold mb-3"><i class="bi bi-person-badge me-2 text-primary"></i>Employee Details</h5>
+                        <h5 class="fw-bold mb-3"><i class="bi bi-person-badge me-2 text-primary"></i>Account & Employee Details</h5>
                         <div class="row g-3 mb-3">
                             <div class="col-md-6">
                                 <label class="form-label fw-bold">Employee ID <span class="text-danger">*</span></label>
@@ -7098,19 +7122,21 @@ def add_employee():
                         </div>
                         <div class="row g-3 mb-3">
                             <div class="col-md-6">
-                                <label class="form-label fw-bold">Employment Type / Role <span class="text-danger">*</span></label>
-                                <select class="form-select" name="role">
-                                    <option value="permanent employee" selected>Permanent Employee</option>
-                                    <option value="temporary employee">Temporary Employee</option>
+                                <label class="form-label fw-bold">Access Role <span class="text-danger">*</span></label>
+                                <select class="form-select" name="access_role" id="accessRoleSelect" onchange="toggleEmpTypeDisplay(this.value)">
+                                    <option value="employee" selected>Employee</option>
                                     <option value="hr">HR</option>
                                     {% if current_user.role == 'admin' %}
                                         <option value="admin">Admin</option>
                                     {% endif %}
                                 </select>
                             </div>
-                            <div class="col-md-6">
-                                <label class="form-label fw-bold">Base Salary (INR)</label>
-                                <input class="form-control" name="salary" type="number" step="0.01" placeholder="e.g. 50000">
+                            <div class="col-md-6" id="empTypeContainer">
+                                <label class="form-label fw-bold">Employee Type <span class="text-danger">*</span></label>
+                                <select class="form-select" name="employment_type" id="empTypeSelect">
+                                    <option value="permanent employee" selected>Permanent Employee</option>
+                                    <option value="temporary employee">Temporary Employee</option>
+                                </select>
                             </div>
                         </div>
                         <div class="row g-3 mb-3">
@@ -7141,6 +7167,12 @@ def add_employee():
                             <div class="col-md-6">
                                 <label class="form-label fw-bold">Experience</label>
                                 <input class="form-control" name="experience" placeholder="Years or summary of experience">
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Base Salary (INR)</label>
+                                <input class="form-control" name="salary" type="number" step="0.01" placeholder="e.g. 50000">
                             </div>
                         </div>
                         <div class="mb-3">
@@ -7175,10 +7207,10 @@ def add_employee():
                         <div class="bg-light p-3 rounded border mb-4">
                             <div class="form-check form-switch mb-3">
                                 <input class="form-check-input" type="checkbox" name="create_account" value="1" id="createAccountSwitch" onchange="document.getElementById('userAccountFields').style.display = this.checked ? 'block' : 'none';">
-                                <label class="form-check-label fw-bold text-primary" for="createAccountSwitch"><i class="bi bi-person-lock me-1"></i>Create User Login Account for this Employee</label>
+                                <label class="form-check-label fw-bold text-primary" for="createAccountSwitch"><i class="bi bi-person-lock me-1"></i>Create User Login Account for this Profile</label>
                             </div>
                             <div id="userAccountFields" style="display: none;">
-                                <p class="small text-muted mb-3">System login credentials will allow this employee to access their dashboard and leave requests.</p>
+                                <p class="small text-muted mb-3">System login credentials will allow access to the dashboard based on the assigned Access Role.</p>
                                 <div class="row g-3">
                                     <div class="col-md-6">
                                         <label class="form-label fw-semibold">Username</label>
@@ -7198,12 +7230,26 @@ def add_employee():
 
                         <div class="d-flex justify-content-end gap-2">
                             <a class="btn btn-outline-secondary" href="{{ url_for('admin_employees') }}">Cancel</a>
-                            <button class="btn btn-primary" type="submit"><i class="bi bi-plus-lg me-1"></i>Add Employee</button>
+                            <button class="btn btn-primary" type="submit"><i class="bi bi-plus-lg me-1"></i>Submit Profile</button>
                         </div>
                     </form>
                 </div>
             </div>
         </div>
+
+        <script>
+        function toggleEmpTypeDisplay(val) {
+            const container = document.getElementById('empTypeContainer');
+            const select = document.getElementById('empTypeSelect');
+            if (val === 'employee') {
+                container.style.display = 'block';
+                select.disabled = false;
+            } else {
+                container.style.display = 'none';
+                select.disabled = true;
+            }
+        }
+        </script>
         {% endblock %}
         """,
     )
