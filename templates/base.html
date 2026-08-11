@@ -48,7 +48,25 @@
             {% set is_admin_or_hr = is_admin or is_hr %}
             <nav class="sidebar-nav">
                 <a class="sidebar-link {% if active_endpoint == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}"><i class="bi bi-grid-1x2-fill"></i><span>Dashboard</span></a>
-                {% if is_admin_or_hr %}<a class="sidebar-link {% if active_endpoint in ['admin_employees', 'add_employee', 'view_employee', 'edit_employee'] %}active{% endif %}" href="{{ url_for('admin_employees') }}"><i class="bi bi-people"></i><span>Employees</span></a>{% endif %}
+                {% if is_admin_or_hr %}
+                <div>
+                    {% set is_emp_mgmt = active_endpoint in ['admin_employees', 'admin_hr', 'admin_users', 'add_employee', 'view_employee', 'edit_employee'] %}
+                    <a class="sidebar-link {% if is_emp_mgmt %}active{% endif %} d-flex justify-content-between align-items-center" data-bs-toggle="collapse" href="#empMgmtSubmenu" role="button" aria-expanded="{% if is_emp_mgmt %}true{% else %}false{% endif %}" aria-controls="empMgmtSubmenu">
+                        <div class="d-flex align-items-center gap-3">
+                            <i class="bi bi-people"></i>
+                            <span>Employee Management</span>
+                        </div>
+                        <i class="bi bi-chevron-down small" style="font-size: 11px;"></i>
+                    </a>
+                    <div class="collapse {% if is_emp_mgmt %}show{% endif %}" id="empMgmtSubmenu">
+                        <div class="sidebar-submenu">
+                            <a class="sidebar-sublink {% if active_endpoint in ['admin_employees', 'add_employee', 'view_employee', 'edit_employee'] %}active{% endif %}" href="{{ url_for('admin_employees') }}"><i class="bi bi-person"></i><span>Employees</span></a>
+                            <a class="sidebar-sublink {% if active_endpoint == 'admin_hr' %}active{% endif %}" href="{{ url_for('admin_hr') }}"><i class="bi bi-person-badge"></i><span>HR</span></a>
+                            {% if is_admin %}<a class="sidebar-sublink {% if active_endpoint == 'admin_users' %}active{% endif %}" href="{{ url_for('admin_users') }}"><i class="bi bi-shield-check"></i><span>Admin</span></a>{% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
                 {% if is_admin_or_hr %}
                 <a class="sidebar-link {% if active_endpoint == 'admin_attendance' %}active{% endif %}" href="{{ url_for('admin_attendance') }}"><i class="bi bi-calendar-check"></i><span>Attendance</span></a>
                 {% else %}
