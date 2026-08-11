@@ -6809,6 +6809,7 @@ def add_employee():
     if request.method == "POST":
         employee_code = request.form.get("employee_code", "").strip()
         name = request.form.get("name", "").strip()
+        role = request.form.get("role", "permanent employee").strip()
         address = request.form.get("address", "").strip()
         education = request.form.get("education", "").strip()
         experience = request.form.get("experience", "").strip()
@@ -6825,35 +6826,113 @@ def add_employee():
         other_path = save_uploaded_file(other_file)
         date_of_joining = request.form.get("date_of_joining", "").strip() or None
         date_of_birth = request.form.get("date_of_birth", "").strip() or None
+
+        # Integrated Login Account Creation Fields
+        create_account = request.form.get("create_account") == "1"
+        username = request.form.get("username", "").strip()
+        email = request.form.get("email", "").strip()
+        custom_password = request.form.get("password", "").strip()
+
         with get_db() as conn:
             valid, err_msg = validate_employee_code(conn, employee_code)
             if not valid:
                 flash(err_msg, "danger")
                 return redirect(url_for("add_employee"))
 
-            conn.execute(
-                "INSERT INTO employees (name, employee_code, address, education, experience, contact_number, emergency_contact, department, salary, pan_path, aadhaar_path, other_docs_path, date_of_joining, date_of_birth) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    name,
-                    employee_code,
-                    address,
-                    education,
-                    experience,
-                    contact_number,
-                    emergency_contact,
-                    department,
-                    salary,
-                    pan_path,
-                    aadhaar_path,
-                    other_path,
-                    date_of_joining,
-                    date_of_birth,
-                ),
-            )
+            new_user_id = None
+            temp_password = None
+
+            if create_account or username:
+                if not username or not email:
+                    flash("Username and Email are required to create a user login account.", "danger")
+                    return redirect(url_for("add_employee"))
+
+                existing_user = conn.execute(
+                    "SELECT id FROM users WHERE username = ?",
+                    (username,),
+                ).fetchone()
+                if existing_user:
+                    flash("Username already exists. Please choose a different username.", "danger")
+                    return redirect(url_for("add_employee"))
+
+                temp_password = custom_password if custom_password else secrets.token_urlsafe(12)
+                cursor = conn.execute(
+                    "INSERT INTO users (username, password_hash, role, full_name, email, force_password_change) VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        username,
+                        generate_password_hash(temp_password),
+                        role,
+                        name,
+                        email,
+                        1 if not custom_password else 0,
+                    ),
+                )
+                new_user_id = cursor.lastrowid
+
+            if new_user_id:
+                conn.execute(
+                    "INSERT INTO employees (user_id, name, employee_code, address, education, experience, contact_number, emergency_contact, department, salary, pan_path, aadhaar_path, other_docs_path, date_of_joining, date_of_birth) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        new_user_id,
+                        name,
+                        employee_code,
+                        address,
+                        education,
+                        experience,
+                        contact_number,
+                        emergency_contact,
+                        department,
+                        salary,
+                        pan_path,
+                        aadhaar_path,
+                        other_path,
+                        date_of_joining,
+                        date_of_birth,
+                    ),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO employees (name, employee_code, address, education, experience, contact_number, emergency_contact, department, salary, pan_path, aadhaar_path, other_docs_path, date_of_joining, date_of_birth) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        name,
+                        employee_code,
+                        address,
+                        education,
+                        experience,
+                        contact_number,
+                        emergency_contact,
+                        department,
+                        salary,
+                        pan_path,
+                        aadhaar_path,
+                        other_path,
+                        date_of_joining,
+                        date_of_birth,
+                    ),
+                )
+
             conn.commit()
             sync_all_employee_roles(conn)
-        flash("Employee added.", "success")
+
+            if new_user_id:
+                create_notification(
+                    new_user_id,
+                    "Welcome to HRMS",
+                    f"Hello {name}, your account (@{username}) has been created.",
+                    url_for("dashboard"),
+                )
+                notify_admins(
+                    "New User Account Created",
+                    f"Account created for {name} (@{username}) with role {role}.",
+                    url_for("admin_employees"),
+                )
+                send_welcome_email(email, name, username, temp_password)
+                flash(f"Employee and login account created successfully. Temporary password: {temp_password}", "success")
+            else:
+                flash("Employee added successfully.", "success")
+
         return redirect(url_for("admin_employees"))
+
     return render_template_string(
         """
         {% extends "base.html" %}
@@ -6863,7 +6942,7 @@ def add_employee():
             <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
                 <div>
                     <h1 class="h3 mb-1"><i class="bi bi-person-plus me-2 text-primary"></i>Add Employee</h1>
-                    <p class="text-muted mb-0">Add a new employee profile to the system.</p>
+                    <p class="text-muted mb-0">Add a new employee profile and optional login credentials to the system.</p>
                 </div>
                 <div>
                     <a class="btn btn-outline-secondary" href="{{ url_for('admin_employees') }}"><i class="bi bi-arrow-left me-1"></i>Back to Employees</a>
@@ -6884,6 +6963,7 @@ def add_employee():
             <div class="card shadow-sm border-0 mx-auto" style="max-width: 800px;">
                 <div class="card-body p-4">
                     <form method="post" enctype="multipart/form-data">
+                        <h5 class="fw-bold mb-3"><i class="bi bi-person-badge me-2 text-primary"></i>Employee Details</h5>
                         <div class="row g-3 mb-3">
                             <div class="col-md-6">
                                 <label class="form-label fw-bold">Employee ID <span class="text-danger">*</span></label>
@@ -6894,18 +6974,19 @@ def add_employee():
                                 <input class="form-control" name="name" required placeholder="Full Name">
                             </div>
                         </div>
-                        <div class="mb-3">
-                            <label class="form-label fw-bold">Address</label>
-                            <textarea class="form-control" name="address" rows="3" placeholder="Full residential address"></textarea>
-                        </div>
                         <div class="row g-3 mb-3">
                             <div class="col-md-6">
-                                <label class="form-label fw-bold">Education</label>
-                                <input class="form-control" name="education" placeholder="Highest qualification">
+                                <label class="form-label fw-bold">Employment Type / Role <span class="text-danger">*</span></label>
+                                <select class="form-select" name="role">
+                                    <option value="permanent employee" selected>Permanent Employee</option>
+                                    <option value="temporary employee">Temporary Employee</option>
+                                    <option value="hr">HR</option>
+                                    <option value="admin">Admin</option>
+                                </select>
                             </div>
                             <div class="col-md-6">
-                                <label class="form-label fw-bold">Experience</label>
-                                <input class="form-control" name="experience" placeholder="Years or summary of experience">
+                                <label class="form-label fw-bold">Base Salary (INR)</label>
+                                <input class="form-control" name="salary" type="number" step="0.01" placeholder="e.g. 50000">
                             </div>
                         </div>
                         <div class="row g-3 mb-3">
@@ -6928,6 +7009,20 @@ def add_employee():
                                 <input class="form-control" name="emergency_contact" placeholder="Emergency contact">
                             </div>
                         </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Education</label>
+                                <input class="form-control" name="education" placeholder="Highest qualification">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Experience</label>
+                                <input class="form-control" name="experience" placeholder="Years or summary of experience">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Address</label>
+                            <textarea class="form-control" name="address" rows="2" placeholder="Full residential address"></textarea>
+                        </div>
                         <div class="mb-3">
                             <label class="form-label fw-bold d-block">Department</label>
                             <div class="d-flex flex-wrap gap-3">
@@ -6936,10 +7031,7 @@ def add_employee():
                                 <label class="form-check form-check-inline mb-0"><input class="form-check-input" type="checkbox" name="department" value="Website"> Website</label>
                             </div>
                         </div>
-                        <div class="mb-3">
-                            <label class="form-label fw-bold">Base Salary (INR)</label>
-                            <input class="form-control" name="salary" type="number" step="0.01" placeholder="e.g. 50000">
-                        </div>
+
                         <hr class="my-4">
                         <h5 class="fw-bold mb-3"><i class="bi bi-file-earmark-arrow-up me-2 text-primary"></i>Employee Documents</h5>
                         <div class="mb-3">
@@ -6954,6 +7046,32 @@ def add_employee():
                             <label class="form-label fw-semibold">Other Documents (upload)</label>
                             <input class="form-control" type="file" name="other">
                         </div>
+
+                        <hr class="my-4">
+                        <div class="bg-light p-3 rounded border mb-4">
+                            <div class="form-check form-switch mb-3">
+                                <input class="form-check-input" type="checkbox" name="create_account" value="1" id="createAccountSwitch" onchange="document.getElementById('userAccountFields').style.display = this.checked ? 'block' : 'none';">
+                                <label class="form-check-label fw-bold text-primary" for="createAccountSwitch"><i class="bi bi-person-lock me-1"></i>Create User Login Account for this Employee</label>
+                            </div>
+                            <div id="userAccountFields" style="display: none;">
+                                <p class="small text-muted mb-3">System login credentials will allow this employee to access their dashboard and leave requests.</p>
+                                <div class="row g-3">
+                                    <div class="col-md-6">
+                                        <label class="form-label fw-semibold">Username</label>
+                                        <input class="form-control" name="username" placeholder="e.g. johndoe">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label fw-semibold">Account Email</label>
+                                        <input class="form-control" name="email" type="email" placeholder="e.g. john@example.com">
+                                    </div>
+                                    <div class="col-md-12">
+                                        <label class="form-label fw-semibold">Password</label>
+                                        <input class="form-control" name="password" type="password" placeholder="Leave blank to auto-generate temporary password">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="d-flex justify-content-end gap-2">
                             <a class="btn btn-outline-secondary" href="{{ url_for('admin_employees') }}">Cancel</a>
                             <button class="btn btn-primary" type="submit"><i class="bi bi-plus-lg me-1"></i>Add Employee</button>
