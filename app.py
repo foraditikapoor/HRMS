@@ -7756,6 +7756,7 @@ def edit_employee(emp_id):
     if request.method == "POST":
         employee_code = request.form.get("employee_code", "").strip()
         name = request.form.get("name", "").strip()
+        employment_type = request.form.get("employment_type", "").strip().lower()
         address = request.form.get("address", "").strip()
         education = request.form.get("education", "").strip()
         experience = request.form.get("experience", "").strip()
@@ -7783,6 +7784,19 @@ def edit_employee(emp_id):
             if not valid:
                 flash(err_msg, "danger")
                 return redirect(url_for("edit_employee", emp_id=emp_id))
+
+            if employment_type in ("permanent employee", "permanent"):
+                target_role = "permanent employee"
+            elif employment_type in ("temporary employee", "temporary"):
+                target_role = "temporary employee"
+            else:
+                target_role = None
+
+            if target_role and r["user_id"]:
+                conn.execute(
+                    "UPDATE users SET role = ? WHERE id = ?",
+                    (target_role, r["user_id"]),
+                )
 
             conn.execute(
                 """
@@ -7817,6 +7831,16 @@ def edit_employee(emp_id):
             )
         flash("Employee updated.", "success")
         return redirect(url_for("view_employee", emp_id=emp_id))
+
+    current_emp_type = "temporary employee"
+    with get_db() as conn:
+        if r["user_id"]:
+            user_row = conn.execute("SELECT role FROM users WHERE id = ?", (r["user_id"],)).fetchone()
+            if user_row:
+                current_emp_type = user_row["role"]
+        else:
+            current_emp_type = compute_employee_role(r["date_of_joining"])
+
     current_depts = (r["department"] or "").split(",") if r["department"] else []
     return render_template_string(
         """
@@ -7856,6 +7880,19 @@ def edit_employee(emp_id):
                             <div class="col-md-6">
                                 <label class="form-label fw-bold">Name <span class="text-danger">*</span></label>
                                 <input class="form-control" name="name" value="{{ r.name }}" required>
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Employment Type <span class="text-danger">*</span></label>
+                                <select class="form-select" name="employment_type">
+                                    <option value="permanent employee" {% if current_emp_type in ['permanent employee', 'permanent'] %}selected{% endif %}>Permanent Employee</option>
+                                    <option value="temporary employee" {% if current_emp_type not in ['permanent employee', 'permanent'] %}selected{% endif %}>Temporary Employee</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Base Salary (INR)</label>
+                                <input class="form-control" name="salary" type="number" step="0.01" value="{{ r.salary or '' }}" placeholder="e.g. 50000">
                             </div>
                         </div>
                         <div class="mb-3">
