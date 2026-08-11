@@ -128,10 +128,12 @@ def amount_to_words(amount):
 
 def generate_payslip_pdf(payroll_data):
     """Generate professional PDF payslip using ReportLab from existing payroll dict."""
+    import os
     import io
+    import datetime
     from reportlab.lib.pagesizes import letter
     from reportlab.lib import colors
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, Image as RLImage
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
     buffer = io.BytesIO()
@@ -206,16 +208,41 @@ def generate_payslip_pdf(payroll_data):
 
     elements = []
 
-    # Header Table
+    # Bizznex Logo Asset Integration
+    logo_path = os.path.join(os.path.dirname(__file__), "static", "images", "bizznex-logo.png")
+    logo_img = None
+    if os.path.exists(logo_path):
+        try:
+            logo_img = RLImage(logo_path, width=38, height=38)
+        except Exception:
+            logo_img = None
+
     p_month = payroll_data.get('payroll_month', '')
     p_status = payroll_data.get('payroll_status', 'Finalized')
+    pay_date = payroll_data.get('pay_date') or datetime.date.today().strftime("%d %b %Y")
+
+    if logo_img:
+        brand_cell = Table(
+            [[logo_img, Paragraph("<b>BIZZNEX</b>", title_style)]],
+            colWidths=[44, 290]
+        )
+        brand_cell.setStyle(TableStyle([
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('LEFTPADDING', (0,0), (-1,-1), 0),
+            ('RIGHTPADDING', (0,0), (-1,-1), 0),
+            ('TOPPADDING', (0,0), (-1,-1), 0),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+        ]))
+    else:
+        brand_cell = Paragraph("<b>BIZZNEX</b>", title_style)
+
     header_data = [
         [
-            Paragraph("<b>BIZZNEX HRMS</b>", title_style),
+            brand_cell,
             Paragraph(f"<b>PAYSLIP</b><br/><font size=10 color='#64748b'>{p_month}</font>", badge_style)
         ],
         [
-            Paragraph("Enterprise Human Resource Management System", subtitle_style),
+            Paragraph("Enterprise Salary & Compensation Statement", subtitle_style),
             Paragraph(f"<font size=9 color='#64748b'>Status: <b>{p_status}</b></font>", ParagraphStyle('StatusR', parent=styles['Normal'], alignment=2))
         ]
     ]
@@ -239,14 +266,14 @@ def generate_payslip_pdf(payroll_data):
         [
             Paragraph("<b>Employee ID:</b>", header_cell_style),
             Paragraph(f"EMP-{payroll_data.get('emp_id', 0):04d}", body_cell_style),
-            Paragraph("<b>Working Days:</b>", header_cell_style),
-            Paragraph(f"{payroll_data.get('working_days', 0)} Days", body_cell_style),
+            Paragraph("<b>Pay Date:</b>", header_cell_style),
+            Paragraph(str(pay_date), body_cell_style),
         ],
         [
             Paragraph("<b>Department:</b>", header_cell_style),
             Paragraph(str(payroll_data.get("department", "N/A")), body_cell_style),
-            Paragraph("<b>Present Days:</b>", header_cell_style),
-            Paragraph(f"{payroll_data.get('present_days', 0)} Days", body_cell_style),
+            Paragraph("<b>Working Days:</b>", header_cell_style),
+            Paragraph(f"{payroll_data.get('working_days', 0)} Days", body_cell_style),
         ],
         [
             Paragraph("<b>Per Day Salary:</b>", header_cell_style),
@@ -345,7 +372,7 @@ def generate_payslip_pdf(payroll_data):
 
     # Footer note
     footer_text = Paragraph(
-        "<i>Note: This is an official computer-generated payslip from Bizznex HRMS. No physical signature is required.</i>",
+        "<i>Note: This is an official computer-generated payslip from Bizznex. No physical signature is required.</i>",
         ParagraphStyle('Foot', parent=styles['Normal'], fontSize=8, textColor=colors.HexColor('#94a3b8'), alignment=1)
     )
     elements.append(footer_text)
@@ -6962,6 +6989,10 @@ def view_employee(emp_id):
                                     <span class="badge bg-secondary fs-6">Temporary Employee</span>
                                 {% endif %}
                             </p>
+                        </div>
+                        <div class="col-md-6">
+                            <p class="mb-1 text-muted small">Employee ID</p>
+                            <p class="fw-semibold mb-0"><span class="badge bg-secondary bg-opacity-10 text-dark border">EMP-{{ "%04d"|format(r.id) }}</span></p>
                         </div>
                         <div class="col-md-6"><p class="mb-1 text-muted small">Department</p><p class="fw-semibold mb-0"><span class="badge bg-light text-dark border">{{ r.department or 'N/A' }}</span></p></div>
                         <div class="col-md-6"><p class="mb-1 text-muted small">Date of Joining</p><p class="fw-semibold mb-0">{{ r.date_of_joining or 'N/A' }}</p></div>
