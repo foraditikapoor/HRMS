@@ -1132,11 +1132,11 @@ def calculate_permanent_date(joining_date_str):
 def compute_employee_role(date_of_joining_str, current_role=None):
     """Computes whether an employee is 'temporary employee' or 'permanent employee' based on date_of_joining.
 
-    Admin and HR roles are never altered.
+    Admin, HR, and Permanent Employee roles are preserved.
     """
     norm_role = (current_role or "").lower().strip()
-    if norm_role in ("admin", "hr"):
-        return norm_role
+    if norm_role in ("admin", "hr", "permanent employee", "permanent"):
+        return norm_role if norm_role != "permanent" else "permanent employee"
 
     if not date_of_joining_str:
         return "temporary employee"
