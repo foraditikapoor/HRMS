@@ -1751,6 +1751,8 @@ def ensure_settings_tables():
         cols = [col["name"] for col in conn.execute("PRAGMA table_info(user_preferences)").fetchall()]
         if "dashboard_reset_at" not in cols:
             conn.execute("ALTER TABLE user_preferences ADD COLUMN dashboard_reset_at TEXT")
+        if "recent_attendance_cleared_at" not in cols:
+            conn.execute("ALTER TABLE user_preferences ADD COLUMN recent_attendance_cleared_at TEXT")
         conn.commit()
 
 
@@ -3240,20 +3242,68 @@ def reset_today_dashboard():
     return redirect(url_for("dashboard"))
 
 
+@app.route("/admin/dashboard/clear-recent-attendance", methods=["POST"])
+@login_required
+def clear_recent_attendance():
+    if current_user.role != "admin":
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.is_json:
+            return jsonify({"success": False, "error": "Admin access required."}), 403
+        flash("Admin access required.", "danger")
+        return redirect(url_for("dashboard"))
+
+    now_iso = datetime.datetime.now(IST).isoformat()
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_preferences (user_id, recent_attendance_cleared_at)
+            VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET recent_attendance_cleared_at = excluded.recent_attendance_cleared_at
+            """,
+            (current_user.id, now_iso),
+        )
+        conn.commit()
+
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.is_json:
+        return jsonify({"success": True, "message": "Recent attendance display cleared."})
+
+    flash("Recent attendance display cleared.", "success")
+    return redirect(url_for("dashboard"))
+
+
 @app.route("/dashboard")
 @login_required
 def dashboard():
     # Fetch today's attendance and recent records for the current user
     today = datetime.date.today().isoformat()  # noqa: DTZ011  # Naive date check for attendance
     with get_db() as conn:
+        pref = conn.execute(
+            "SELECT recent_attendance_cleared_at FROM user_preferences WHERE user_id = ?",
+            (current_user.id,),
+        ).fetchone()
+        cleared_at = pref["recent_attendance_cleared_at"] if pref and pref["recent_attendance_cleared_at"] else None
+
         row = conn.execute(
             "SELECT id, date, punch_in_time, punch_out_time, total_hours FROM attendance WHERE user_id = ? AND date = ?",
             (current_user.id, today),
         ).fetchone()
-        records = conn.execute(
-            "SELECT date, punch_in_time, punch_out_time, total_hours FROM attendance WHERE user_id = ? ORDER BY date DESC LIMIT 20",
-            (current_user.id,),
-        ).fetchall()
+
+        if cleared_at:
+            records = conn.execute(
+                """
+                SELECT date, punch_in_time, punch_out_time, total_hours
+                FROM attendance
+                WHERE user_id = ?
+                  AND (punch_in_time > ? OR (punch_in_time IS NULL AND date > ?))
+                ORDER BY date DESC, id DESC
+                LIMIT 20
+                """,
+                (current_user.id, cleared_at, cleared_at[:10]),
+            ).fetchall()
+        else:
+            records = conn.execute(
+                "SELECT date, punch_in_time, punch_out_time, total_hours FROM attendance WHERE user_id = ? ORDER BY date DESC, id DESC LIMIT 20",
+                (current_user.id,),
+            ).fetchall()
 
     admin_summary = None
     admin_pending_tasks = []
@@ -3495,23 +3545,34 @@ def dashboard():
                     </div>
                 </div>
 
-                <div class="card shadow-sm">
-                    <div class="card-body">
-                        <h4 class="h5">Recent Attendance</h4>
+                <div class="card shadow-sm border-0 mb-4">
+                    <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center">
+                        <h5 class="card-title mb-0 fw-bold text-primary"><i class="bi bi-clock-history me-2"></i>Recent Attendance</h5>
+                        {% if current_user.role == 'admin' %}
+                        <div>
+                            <form id="clearRecentAttendanceForm" method="post" action="{{ url_for('clear_recent_attendance') }}" style="display:none;"></form>
+                            <button type="button" class="btn btn-sm btn-outline-danger shadow-sm" onclick="confirmClearRecentAttendance()">
+                                <i class="bi bi-trash me-1"></i>Clear Recent Attendance
+                            </button>
+                        </div>
+                        {% endif %}
+                    </div>
+                    <div class="card-body p-0">
+                        {% if records %}
                         <div class="table-responsive">
-                            <table class="table table-striped">
-                                <thead>
+                            <table class="table table-hover align-middle mb-0">
+                                <thead class="table-light small">
                                     <tr>
-                                        <th>Date</th>
+                                        <th class="ps-4">Date</th>
                                         <th>Punch In</th>
                                         <th>Punch Out</th>
                                         <th>Total Hours</th>
                                     </tr>
                                 </thead>
-                                <tbody>
+                                <tbody class="small">
                                 {% for r in records %}
                                     <tr>
-                                        <td>{{ r.date }}</td>
+                                        <td class="ps-4">{{ r.date }}</td>
                                         <td>{{ r.punch_in_time | format_timestamp }}</td>
                                         <td>{{ r.punch_out_time | format_timestamp }}</td>
                                         <td>{{ r.total_hours or '' }}</td>
@@ -3520,6 +3581,11 @@ def dashboard():
                                 </tbody>
                             </table>
                         </div>
+                        {% else %}
+                        <div class="text-center py-4 text-muted">
+                            <p class="fs-5 mb-0 fw-medium">No recent attendance records.</p>
+                        </div>
+                        {% endif %}
                     </div>
                 </div>
 
@@ -3527,6 +3593,11 @@ def dashboard():
                     function confirmResetDashboard() {
                         if (confirm("Are you sure you want to reset today's dashboard summary view? This will only reset the active dashboard summary counters and will NOT delete or alter any attendance records in the database.")) {
                             document.getElementById('resetDashboardForm').submit();
+                        }
+                    }
+                    function confirmClearRecentAttendance() {
+                        if (confirm("Clear recent attendance from the dashboard?\n\nThis will only clear the Recent Attendance display. Your attendance records will not be deleted.")) {
+                            document.getElementById('clearRecentAttendanceForm').submit();
                         }
                     }
                 </script>
