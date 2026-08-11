@@ -6833,6 +6833,10 @@ def add_employee():
         email = request.form.get("email", "").strip()
         custom_password = request.form.get("password", "").strip()
 
+        if current_user.role == "hr" and role == "admin":
+            flash("Access denied. HR users cannot create Admin accounts.", "danger")
+            return redirect(url_for("add_employee"))
+
         with get_db() as conn:
             valid, err_msg = validate_employee_code(conn, employee_code)
             if not valid:
@@ -6981,7 +6985,9 @@ def add_employee():
                                     <option value="permanent employee" selected>Permanent Employee</option>
                                     <option value="temporary employee">Temporary Employee</option>
                                     <option value="hr">HR</option>
-                                    <option value="admin">Admin</option>
+                                    {% if current_user.role == 'admin' %}
+                                        <option value="admin">Admin</option>
+                                    {% endif %}
                                 </select>
                             </div>
                             <div class="col-md-6">
